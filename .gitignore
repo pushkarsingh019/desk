@@ -2,5 +2,10 @@ __pycache__/
 *.pyc
 .venv/
 .DS_Store
-.desk-store/
-desk-state.json
+
+# The desk's own store and its layout live outside the repo, in DESK_DATA_DIR
+# (~/.desk by default). These catch a run configured to keep them alongside
+# the code instead.
+.desk/
+sheets.json
+layout.json

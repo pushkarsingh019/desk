@@ -8,9 +8,9 @@ covers something the user positioned by hand.
 
 **Status:** ready-for-agent
 
-- [ ] A newly created sheet appears in the inbox strip, never on the desk surface
-- [ ] Dragging a sheet out of the inbox places it on the desk at the drop position
-- [ ] A placed sheet is never returned to the inbox by any subsequent event
-- [ ] A new version of a sheet already placed on the desk updates it in place and does not send it back to the inbox
-- [ ] No code path places, tiles, or repositions a sheet without a user gesture
-- [ ] Inbox membership is part of the layout state and persists across restart
+- [x] A newly created sheet appears in the inbox strip, never on the desk surface
+- [x] Dragging a sheet out of the inbox places it on the desk at the drop position
+- [x] A placed sheet is never returned to the inbox by any subsequent event
+- [x] A new version of a sheet already placed on the desk updates it in place and does not send it back to the inbox
+- [x] No code path places, tiles, or repositions a sheet without a user gesture
+- [x] Inbox membership is part of the layout state and persists across restart

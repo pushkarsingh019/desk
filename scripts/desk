@@ -1,0 +1,41 @@
+#!/bin/sh
+# The `desk` command.
+#
+# `uv` is not on the PATH of non-interactive shells or launchd on studio, and
+# `uv run --directory` moves the process into the desk's own repo — so this
+# wrapper pins the absolute uv path and carries the caller's directory across
+# in DESK_CWD, which is what bare `/desk` resolves figures against.
+
+set -e
+
+UV="${DESK_UV:-$HOME/.local/bin/uv}"
+# $0 may be a symlink, in which case its directory is not the project. The
+# generated launcher in ~/.local/bin passes DESK_PROJECT for exactly this.
+SELF="$0"
+while [ -L "$SELF" ]; do
+  LINK="$(readlink "$SELF")"
+  case "$LINK" in
+    /*) SELF="$LINK" ;;
+    *)  SELF="$(dirname "$SELF")/$LINK" ;;
+  esac
+done
+PROJECT="${DESK_PROJECT:-$(cd "$(dirname "$SELF")/.." && pwd)}"
+PYTHON="$PROJECT/.venv/bin/python"
+
+DESK_CWD="${DESK_CWD:-$PWD}"
+export DESK_CWD
+
+# Prefer the interpreter uv already built. Going through `uv run` every time
+# would make every present depend on uv being reachable and the environment
+# being resolvable, for no gain once the environment exists.
+if [ -x "$PYTHON" ]; then
+  exec "$PYTHON" -m desk.cli "$@"
+fi
+
+if [ ! -x "$UV" ]; then
+  echo "desk: no environment at $PYTHON and no uv at $UV." >&2
+  echo "desk: run scripts/install.sh, or set DESK_UV." >&2
+  exit 1
+fi
+
+exec "$UV" run --quiet --directory "$PROJECT" desk "$@"

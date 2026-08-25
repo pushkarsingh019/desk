@@ -10,10 +10,10 @@ the desk.
 
 **Status:** ready-for-agent
 
-- [ ] Publishing a source path begins watching that path
-- [ ] Modifying a watched file on disk creates a new version and emits an SSE event, with no second publish call
-- [ ] A rapid burst of writes to one file debounces into a single version (roughly 300ms), so a half-written `savefig` is never ingested mid-write
-- [ ] A file that has never been published is never picked up, no matter where it is written
-- [ ] Watches survive a server restart
-- [ ] Deleting a watched source file does not delete or damage the sheet
-- [ ] All behaviour is tested through the HTTP API seam
+- [x] Publishing a source path begins watching that path
+- [x] Modifying a watched file on disk creates a new version and emits an SSE event, with no second publish call
+- [x] A rapid burst of writes to one file debounces into a single version (roughly 300ms), so a half-written `savefig` is never ingested mid-write
+- [x] A file that has never been published is never picked up, no matter where it is written
+- [x] Watches survive a server restart
+- [x] Deleting a watched source file does not delete or damage the sheet
+- [x] All behaviour is tested through the HTTP API seam

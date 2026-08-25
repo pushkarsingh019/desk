@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Desk</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='%23c9a227'/><rect x='3' y='4' width='10' height='8' rx='1' fill='%23fff'/></svg>">
+<link rel="stylesheet" href="/desk.css">
+</head>
+<body>
+
+<div id="viewport">
+  <div id="surface"></div>
+</div>
+
+<aside id="inbox" aria-label="Inbox">
+  <header>
+    <span class="inbox-title">Inbox</span>
+    <span id="inbox-count" class="pill">0</span>
+  </header>
+  <div id="inbox-items"></div>
+  <p id="inbox-empty" class="hint">Nothing waiting.<br>Type <code>/desk</code> to present a figure.</p>
+</aside>
+
+<div id="hud">
+  <button id="btn-home" title="Home (0)">home</button>
+  <button id="btn-overview" title="Overview — fit everything (f)">overview</button>
+  <button id="btn-trash" title="Trash">trash <span id="trash-count" class="pill">0</span></button>
+  <span id="zoom-readout">100%</span>
+</div>
+
+<div id="trash-drop">Throw away</div>
+
+<section id="trash-panel" hidden aria-label="Trash">
+  <header>
+    <span>Trash</span>
+    <button id="btn-trash-close" title="Close">×</button>
+  </header>
+  <div id="trash-items"></div>
+  <p id="trash-empty" class="hint">Nothing thrown away.</p>
+</section>
+
+<div id="fullscreen" hidden>
+  <div id="fullscreen-stage"><div id="fullscreen-holder"></div></div>
+  <div id="fullscreen-bar">
+    <span id="fullscreen-name"></span>
+    <button id="fullscreen-reset" title="Fit">fit</button>
+    <button id="fullscreen-close" title="Close (Esc)">close ×</button>
+  </div>
+</div>
+
+<div id="connection" hidden>reconnecting…</div>
+
+<script src="/desk.js"></script>
+</body>
+</html>
