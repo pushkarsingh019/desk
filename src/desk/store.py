@@ -12,7 +12,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import shutil
 import threading
 import time
 import unicodedata
@@ -324,14 +323,6 @@ class Store:
             self._save()
             return dict(sheet)
 
-    def forget(self, sheet_id: str) -> None:
-        """Drop a sheet and its content entirely. Emptying the trash."""
-        with self._lock:
-            if self._sheets.pop(sheet_id, None) is None:
-                return
-            shutil.rmtree(self.content_root / sheet_id, ignore_errors=True)
-            self._save()
-
 
 def _short(value, limit: int = 120) -> str:
     """A path short enough to put in an error message."""
@@ -366,5 +357,4 @@ def _readable_sheet(record) -> dict | None:
         value = record.get(stamp)
         ok = isinstance(value, (int, float)) and not isinstance(value, bool)
         record[stamp] = float(value) if ok else 0.0
-    record.pop("created", None)  # a transient flag that older desks leaked onto disk
     return record

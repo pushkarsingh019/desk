@@ -10,7 +10,7 @@ stack open, and pulls a sheet back out when needed.
 
 - [x] Dragging one sheet onto another forms a pile showing a count
 - [x] Clicking a pile fans it open so its contents are visible
-- [ ] Clicking again, or clicking away, collapses it
+- [x] Clicking again, or clicking away, collapses it
 - [x] The user can drag a single sheet out of a pile, leaving the rest intact
 - [x] A pile of two, reduced to one, stops being a pile
 - [x] A pile moves as a unit when dragged

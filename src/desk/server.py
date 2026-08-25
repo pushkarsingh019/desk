@@ -43,6 +43,16 @@ STATIC_TYPES = {
 }
 
 
+class BadRequest(ValueError):
+    """A request the desk cannot act on as written.
+
+    Distinct from `PublishError`, which means one thing only: a *file* the desk
+    will not accept. Keeping them apart matters because the words are load
+    bearing — CONTEXT.md gives `publish` a precise meaning, and a malformed
+    Content-Length is not a publish.
+    """
+
+
 # --- events ---------------------------------------------------------------
 
 
@@ -295,14 +305,14 @@ def _number(params: dict, key: str) -> float:
     """
     value = params.get(key)
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
-        raise PublishError(f"{key} must be a finite number, not {value!r}")
+        raise BadRequest(f"{key} must be a finite number, not {value!r}")
     return float(value)
 
 
 def _identifier(params: dict, key: str) -> str:
     value = params.get(key)
     if not isinstance(value, str):
-        raise PublishError(f"{key} must be a sheet or pile id, not {value!r}")
+        raise BadRequest(f"{key} must be a sheet or pile id, not {value!r}")
     return value
 
 
@@ -338,11 +348,11 @@ def apply_layout_op(state: dict, op, params: dict) -> dict:
     try:
         transition = LAYOUT_OPS[op]
     except (KeyError, TypeError):
-        raise PublishError(f"unknown layout op {op!r}") from None
+        raise BadRequest(f"unknown layout op {op!r}") from None
     try:
         return transition(state, params)
     except KeyError as exc:
-        raise PublishError(f"{op}: {exc}") from None
+        raise BadRequest(f"{op}: {exc}") from None
 
 
 # --- HTTP -----------------------------------------------------------------
@@ -389,7 +399,7 @@ class Handler(BaseHTTPRequestHandler):
             # The body cannot be read, so the connection cannot be reused —
             # answering and keeping it open would desync the next request.
             self.close_connection = True
-            raise PublishError("Content-Length is not a number") from None
+            raise BadRequest("Content-Length is not a number") from None
         if length <= 0:
             return {}
         try:
@@ -443,7 +453,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(404, f"no such endpoint: {path}")
         except BrokenPipeError:
             pass
-        except PublishError as exc:
+        except (BadRequest, PublishError) as exc:
             return self._error(400, str(exc))
         except Exception as exc:
             self.log_error("%s", exc)
@@ -470,7 +480,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(400, "layout needs an op")
         try:
             state = self.desk.apply_layout(op, body)
-        except (PublishError, layout_model.LayoutError) as exc:
+        except (BadRequest, layout_model.LayoutError) as exc:
             return self._error(400, str(exc))
         return self._json(200, {"layout": state, "geometry": self.desk.geometry_json()})
 
@@ -634,7 +644,10 @@ def resolve_host(wait: float = 0.0) -> tuple[str, str]:
     while True:
         tailnet = tailscale_address()
         if tailnet:
-            return tailnet, os.environ.get("DESK_HOSTNAME") or tailscale_name(tailnet)
+            # Ask Tailscale first so a rename is picked up, and fall back to
+            # the name install.sh baked in — under launchd the Tailscale CLI is
+            # not reachable, which is the whole reason that value exists.
+            return tailnet, tailscale_name(os.environ.get("DESK_HOSTNAME") or tailnet)
         if time.monotonic() >= deadline:
             raise NoTailnet(
                 "no tailscale address found. The desk binds to the tailnet and "

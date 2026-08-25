@@ -13,5 +13,5 @@ source path it was published from.
 - [x] A sheet's position and size are untouched by a new version
 - [x] Version history retains the last 20 versions per sheet; the 21st evicts the oldest
 - [x] The file extension allowlist (`.svg`, `.png`, `.pdf`, `.html`, `.md`) is enforced; anything else is rejected with a clear error
-- [ ] Dotfiles and paths matching `*_tmp*` are rejected
+- [x] Dotfiles and paths matching `*_tmp*` are rejected
 - [x] All behaviour is tested through the HTTP API seam

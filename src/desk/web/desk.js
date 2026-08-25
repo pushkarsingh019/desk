@@ -46,7 +46,11 @@ const connection = $('connection');
 
 // --- state ----------------------------------------------------------------
 
-let state = { sheets: [], trash: [], layout: emptyLayout(), geometry: fallbackGeometry() };
+// `geometry` is null only before the first /api/state lands. Nothing renders
+// until then, so nothing reads it: the page is served by the same server that
+// computes it, with no build step and no deploy step between them, so a desk
+// that answers without geometry does not exist.
+let state = { sheets: [], trash: [], layout: emptyLayout(), geometry: null };
 let sheetsById = new Map();
 const nodes = new Map(); // render key -> element
 const held = new Set(); // sheet/pile keys the pointer is currently moving
@@ -58,17 +62,6 @@ let activeId = null;
 
 function emptyLayout() {
   return { sheets: {}, piles: {}, next_z: 1, next_pile: 1, viewport: { ...HOME } };
-}
-
-/** Only used until the first response lands, or against a server too old to
- *  send geometry. The server's numbers always win. */
-function fallbackGeometry() {
-  return {
-    bounds: null,
-    fan_step: { x: 0.62, y: 0.22 },
-    default_size: { w: 360, h: 280 },
-    min_size: 60,
-  };
 }
 
 function adoptGeometry(geometry) {
@@ -113,7 +106,6 @@ async function layoutOp(op, params) {
 async function refresh() {
   const fresh = await apiGet('/api/state');
   state = fresh;
-  if (!state.geometry) state.geometry = fallbackGeometry();
   indexSheets();
   const stored = state.layout.viewport;
   if (stored && !viewTouched) view = { x: stored.x, y: stored.y, scale: stored.scale };
@@ -526,6 +518,22 @@ function ring(el) {
 
 let lastClick = { id: null, at: 0 };
 
+/** Did this click complete a double-click on `id`?
+ *
+ *  The native dblclick cannot be trusted here — the drag shield retargets it
+ *  away from the sheet — so the pair is recognised from the sheet the pointer
+ *  actually went down on. Both the desk and the inbox ask this same question.
+ */
+function completesDoubleClick(id) {
+  const now = Date.now();
+  if (lastClick.id === id && now - lastClick.at < DOUBLE_CLICK_MS) {
+    lastClick = { id: null, at: 0 };
+    return true;
+  }
+  lastClick = { id: id, at: now };
+  return false;
+}
+
 viewportEl.addEventListener('pointerdown', (e) => {
   if (e.button !== 0 && e.button !== 1) return;
   // A sheet's own controls answer their click. Starting a gesture underneath
@@ -597,20 +605,24 @@ function beginResize(e, sheetEl) {
   const key = sheetEl.dataset.key;
   held.add(key);
   document.body.classList.add('dragging');
+  const sizeAt = (ev) => {
+    const floor = state.geometry.min_size;
+    return {
+      w: Math.max(floor, start.w + (ev.clientX - start.x) / view.scale),
+      h: Math.max(floor, start.h + (ev.clientY - start.y) / view.scale),
+    };
+  };
+
   captureDrag(e, {
     move(ev) {
-      const floor = state.geometry.min_size;
-      const w = Math.max(floor, start.w + (ev.clientX - start.x) / view.scale);
-      const h = Math.max(floor, start.h + (ev.clientY - start.y) / view.scale);
+      const { w, h } = sizeAt(ev);
       sheetEl.style.width = w + 'px';
       sheetEl.style.height = h + 'px';
     },
     up(ev) {
       held.delete(key);
       document.body.classList.remove('dragging');
-      const floor = state.geometry.min_size;
-      const w = Math.max(floor, start.w + (ev.clientX - start.x) / view.scale);
-      const h = Math.max(floor, start.h + (ev.clientY - start.y) / view.scale);
+      const { w, h } = sizeAt(ev);
       layoutOp('resize', { sheet_id: id, w: Math.round(w), h: Math.round(h) });
     },
   });
@@ -641,13 +653,16 @@ function beginMove(e, el, type) {
       const dy = (ev.clientY - start.y) / view.scale;
       if (Math.abs(ev.clientX - start.x) > CLICK_SLOP || Math.abs(ev.clientY - start.y) > CLICK_SLOP) moved = true;
       el.style.transform = 'translate(' + (origin.x + dx) + 'px, ' + (origin.y + dy) + 'px)';
-      highlightDropTarget(ev, el);
+      highlightDropTarget(ev, el, type);
     },
     up(ev) {
       // Read the trash zone before the class that shows it comes off: a
       // display:none element measures as a zero-size box at the origin, and
       // every drop would miss it.
-      const throwingAway = overTrash(ev);
+      // Only a single sheet can be thrown away by dragging. A pile dropped
+      // here just lands here: losing five figures to one gesture is not a
+      // thing ticket 10 asks for, and not a thing to infer.
+      const throwingAway = type !== 'pile' && overTrash(ev);
       held.delete(key);
       el.classList.remove('dragging');
       document.body.classList.remove('dragging');
@@ -661,12 +676,7 @@ function beginMove(e, el, type) {
         // here — the drag shield retargets it away from the sheet — so the
         // pair is recognised from the sheet the pointer actually went down on.
         if (type === 'pile') return layoutOp('toggle_pile', { pile_id: pileId });
-        const now = Date.now();
-        if (lastClick.id === id && now - lastClick.at < DOUBLE_CLICK_MS) {
-          lastClick = { id: null, at: 0 };
-          return openFullscreen(id);
-        }
-        lastClick = { id: id, at: now };
+        if (completesDoubleClick(id)) return openFullscreen(id);
         // A single click on an embedded page hands it the pointer; a click on
         // an image sheet has nothing to hand it to, so it only deactivates.
         if (isFramed(id) && !e.target.closest('.sheet-chrome')) activate(id);
@@ -674,8 +684,7 @@ function beginMove(e, el, type) {
         return;
       }
       if (throwingAway) {
-        if (type === 'pile') state.layout.piles[pileId].members.forEach(trashSheet);
-        else trashSheet(id);
+        trashSheet(id);
         return;
       }
       const dx = (ev.clientX - start.x) / view.scale;
@@ -718,8 +727,8 @@ function dropTarget(ev, dragged) {
 
 let highlighted = null;
 
-function highlightDropTarget(ev, dragged) {
-  const armed = overTrash(ev);
+function highlightDropTarget(ev, dragged, type) {
+  const armed = type !== 'pile' && overTrash(ev);
   trashDrop.classList.toggle('armed', armed);
   const id = armed ? null : dropTarget(ev, dragged);
   const el = id ? nodes.get('sheet:' + id) || pileNodeFor(id) : null;
@@ -795,7 +804,10 @@ inboxItems.addEventListener('pointerdown', (e) => {
       trashDrop.classList.toggle('armed', overTrash(ev));
     },
     up(ev) {
-      const throwingAway = overTrash(ev); // measured before the zone is hidden
+      // Only a single sheet can be thrown away by dragging. A pile dropped
+      // here just lands here: losing five figures to one gesture is not a
+      // thing ticket 10 asks for, and not a thing to infer.
+      const throwingAway = type !== 'pile' && overTrash(ev); // measured before the zone is hidden
       document.body.classList.remove('dragging');
       trashDrop.classList.remove('armed');
       if (ghost) {
@@ -803,12 +815,7 @@ inboxItems.addEventListener('pointerdown', (e) => {
         ghost = null;
       }
       if (!moved) {
-        const now = Date.now();
-        if (lastClick.id === id && now - lastClick.at < DOUBLE_CLICK_MS) {
-          lastClick = { id: null, at: 0 };
-          return openFullscreen(id);
-        }
-        lastClick = { id: id, at: now };
+        if (completesDoubleClick(id)) openFullscreen(id);
         return;
       }
       if (throwingAway) return trashSheet(id);

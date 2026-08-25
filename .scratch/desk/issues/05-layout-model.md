@@ -14,4 +14,4 @@ over a plain state object.
 - [x] Clicking a sheet raises it in z-order
 - [x] Layout persists to disk as JSON and is restored on server start, so the desk survives a reboot
 - [x] Layout transitions are tested directly as pure functions, with no DOM involved
-- [ ] The DOM layer is thin enough to need no tests of its own
+- [x] The DOM layer is thin enough to need no tests of its own
