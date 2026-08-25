@@ -80,7 +80,12 @@ sheets alone.
 macOS protects those behind TCC, and a process launchd starts has no way to
 answer the permission prompt — the desk would bind its port, never listen, and
 log nothing at all. `install.sh` refuses to install from those directories and
-tells you what to do. `~/code/desk` is a good home.
+tells you what to do. `~/code/desk` is where it lives.
+
+Moving the project later is fine: re-run `install.sh`. It notices a `.venv`
+built somewhere else and rebuilds it, because a venv carries absolute paths in
+every console script and a stale one falls through to whatever `python` is on
+PATH — the system one, on a machine used for science.
 
 Settings, all optional, read from the environment:
 

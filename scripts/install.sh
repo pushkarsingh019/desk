@@ -58,6 +58,19 @@ echo "desk: logs      $LOG_DIR"
 
 mkdir -p "$LOG_DIR" "$DATA_DIR" "$BIN_DIR" "$HOME/Library/LaunchAgents" "$SKILL_DIR"
 
+# A venv carries absolute paths in the shebang of every console script, so one
+# that was built somewhere else is quietly broken: the shebang points at an
+# interpreter that no longer exists and the command falls through to whatever
+# python happens to be on PATH — the system one, on a machine used for science.
+# `uv sync` will not notice, because the package versions still match.
+if [ -x "$PROJECT/.venv/bin/python" ]; then
+  BUILT_FOR="$(sed -n '1s|^#!\(.*\)/\.venv/bin/python.*|\1|p' "$PROJECT/.venv/bin/desk" 2>/dev/null || true)"
+  if [ -n "$BUILT_FOR" ] && [ "$BUILT_FOR" != "$PROJECT" ]; then
+    echo "desk: the environment was built for $BUILT_FOR; rebuilding it here"
+    rm -rf "$PROJECT/.venv"
+  fi
+fi
+
 echo "desk: building the pinned environment"
 "$UV" sync --project "$PROJECT" --quiet
 

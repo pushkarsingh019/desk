@@ -10,7 +10,7 @@ nothing to start by hand.
 
 - [x] The server binds to the Tailscale interface and is reachable from another tailnet device at `http://pushkar-studio.taila96c04.ts.net:<port>`
 - [x] The server is not reachable from outside the tailnet
-- [ ] A launchd user agent starts the server at login and restarts it if it dies
+- [x] A launchd user agent starts the server at login and restarts it if it dies
 - [x] The chosen port does not collide with the launchd agents already on studio
 - [x] Installation is one documented command
 - [x] The launchd plist uses absolute paths for `uv` and the project — launchd runs with a minimal PATH that does not include `~/.local/bin`, where `uv` is installed on studio
