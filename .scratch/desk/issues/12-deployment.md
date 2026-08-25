@@ -13,5 +13,6 @@ nothing to start by hand.
 - [ ] A launchd user agent starts the server at login and restarts it if it dies
 - [ ] The chosen port does not collide with the launchd agents already on studio
 - [ ] Installation is one documented command
+- [ ] The launchd plist uses absolute paths for `uv` and the project — launchd runs with a minimal PATH that does not include `~/.local/bin`, where `uv` is installed on studio
 - [ ] Server logs go somewhere findable and are documented
 - [ ] The desk's contents survive a full reboot

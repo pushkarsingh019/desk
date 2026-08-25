@@ -26,7 +26,9 @@ operation. The user browses the desk from a different machine over Tailscale.
 ## Stack
 
 - Python, pinned and run via `uv`, so the server never touches the system Python
-  on a machine used for science.
+  on a machine used for science. `uv` lives at `~/.local/bin/uv` on studio, which
+  is **not** on the PATH of non-interactive shells or launchd — use absolute
+  paths anywhere the environment is not a login shell.
 - Frontend is vanilla JS and CSS with **no build step**. Served static.
 - A launchd user agent keeps the server alive across reboots.
 - Plain HTTP bound to the Tailscale interface. No TLS, no tokens. Tailscale is
