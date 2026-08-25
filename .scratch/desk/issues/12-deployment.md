@@ -15,4 +15,4 @@ nothing to start by hand.
 - [x] Installation is one documented command
 - [x] The launchd plist uses absolute paths for `uv` and the project — launchd runs with a minimal PATH that does not include `~/.local/bin`, where `uv` is installed on studio
 - [x] Server logs go somewhere findable and are documented
-- [ ] The desk's contents survive a full reboot
+- [x] The desk's contents survive a full reboot
