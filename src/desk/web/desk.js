@@ -262,6 +262,16 @@ function buildSheet(sheet) {
   name.className = 'sheet-name';
   const version = document.createElement('span');
   version.className = 'sheet-version';
+  const grow = document.createElement('button');
+  grow.className = 'sheet-grow';
+  grow.title = 'Enlarge (or double-click)';
+  grow.textContent = '\u2197';
+  grow.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const host = grow.closest('.sheet, .pile');
+    if (host && host.dataset.sheetId) openFullscreen(host.dataset.sheetId);
+  });
+
   const bin = document.createElement('button');
   bin.className = 'sheet-trash';
   bin.title = 'Throw away';
@@ -273,7 +283,7 @@ function buildSheet(sheet) {
     const host = bin.closest('.sheet, .pile');
     if (host && host.dataset.sheetId) trashSheet(host.dataset.sheetId);
   });
-  chrome.append(name, version, bin);
+  chrome.append(name, version, grow, bin);
 
   const body = document.createElement('div');
   body.className = 'sheet-body';
@@ -538,7 +548,7 @@ viewportEl.addEventListener('pointerdown', (e) => {
   if (e.button !== 0 && e.button !== 1) return;
   // A sheet's own controls answer their click. Starting a gesture underneath
   // one swallows it — that is how the pile's × used to fan the pile instead.
-  if (e.target.closest('.sheet-trash, .pile-collapse')) return;
+  if (e.target.closest('.sheet-trash, .sheet-grow, .pile-collapse')) return;
 
   const resize = e.target.closest('.resize-handle');
   const sheetEl = e.target.closest('.sheet');
@@ -564,6 +574,25 @@ function anyPileOpen() {
  *  Clicking another sheet, clicking the desk, or Escape puts the cover back.
  *  This lives entirely in the page; the desk's layout never learns about it.
  */
+let pendingActivation = null;
+
+/** Activation waits out the double-click window. Lifting the shield on the
+ *  first click sends the second one into the iframe, and a framed sheet can
+ *  then never be enlarged by double-clicking it. */
+function activateSoon(id) {
+  cancelActivation();
+  pendingActivation = setTimeout(() => {
+    pendingActivation = null;
+    activate(id);
+  }, DOUBLE_CLICK_MS);
+}
+
+function cancelActivation() {
+  if (pendingActivation === null) return;
+  clearTimeout(pendingActivation);
+  pendingActivation = null;
+}
+
 function activate(id) {
   if (activeId === id) return;
   deactivate();
@@ -573,6 +602,7 @@ function activate(id) {
 }
 
 function deactivate() {
+  cancelActivation();
   if (activeId === null) return;
   const el = nodes.get('sheet:' + activeId);
   if (el) el.classList.remove('active');
@@ -676,10 +706,13 @@ function beginMove(e, el, type) {
         // here — the drag shield retargets it away from the sheet — so the
         // pair is recognised from the sheet the pointer actually went down on.
         if (type === 'pile') return layoutOp('toggle_pile', { pile_id: pileId });
-        if (completesDoubleClick(id)) return openFullscreen(id);
+        if (completesDoubleClick(id)) {
+          cancelActivation();
+          return openFullscreen(id);
+        }
         // A single click on an embedded page hands it the pointer; a click on
         // an image sheet has nothing to hand it to, so it only deactivates.
-        if (isFramed(id) && !e.target.closest('.sheet-chrome')) activate(id);
+        if (isFramed(id) && !e.target.closest('.sheet-chrome')) activateSoon(id);
         else deactivate();
         return;
       }
@@ -804,10 +837,9 @@ inboxItems.addEventListener('pointerdown', (e) => {
       trashDrop.classList.toggle('armed', overTrash(ev));
     },
     up(ev) {
-      // Only a single sheet can be thrown away by dragging. A pile dropped
-      // here just lands here: losing five figures to one gesture is not a
-      // thing ticket 10 asks for, and not a thing to infer.
-      const throwingAway = type !== 'pile' && overTrash(ev); // measured before the zone is hidden
+      // Measured before the class that shows the zone comes off: a display:none
+      // element is a zero-size box at the origin, and every drop would miss it.
+      const throwingAway = overTrash(ev);
       document.body.classList.remove('dragging');
       trashDrop.classList.remove('armed');
       if (ghost) {
@@ -892,6 +924,7 @@ viewportEl.addEventListener('dblclick', (e) => {
 function openFullscreen(id) {
   const sheet = sheetsById.get(id);
   if (!sheet) return;
+  cancelActivation();
   fullscreenId = id;
   $('fullscreen-name').textContent = sheet.source_path;
   fullscreenEl.hidden = false;

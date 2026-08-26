@@ -121,6 +121,7 @@ button:active { transform: translateY(1px); }
 }
 .sheet-version { font-size: 10px; color: #62656d; }
 
+.sheet-grow,
 .sheet-trash {
   flex: 0 0 auto;
   padding: 0 5px;
@@ -131,6 +132,7 @@ button:active { transform: translateY(1px); }
   border-radius: 4px;
 }
 .sheet-trash:hover { color: #fff; background: var(--danger); }
+.sheet-grow:hover { color: #fff; background: #3a3d45; }
 
 .sheet-body {
   position: relative;
