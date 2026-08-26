@@ -71,10 +71,14 @@ sh scripts/install.sh
 ```
 
 One command. It builds the pinned environment with `uv`, installs the `desk`
-command to `~/.local/bin/desk`, copies the `/desk` skill into
-`~/.claude/skills/desk/`, writes a launchd user agent, starts it, and prints
-the desk URL. `sh scripts/uninstall.sh` reverses all of that and leaves your
-sheets alone.
+command to `~/.local/bin/desk`, links the `/desk` skill into every agent on the
+machine that has a skills directory, writes a launchd user agent, starts it,
+and prints the desk URL. `sh scripts/uninstall.sh` reverses all of that and
+leaves your sheets alone.
+
+The skill is linked, not copied — one canonical copy in `skill/desk/`, beside
+the server it drives, so it can never describe a `desk` command the installed
+server does not have.
 
 **The project must not live in `~/Documents`, `~/Desktop`, or `~/Downloads`.**
 macOS protects those behind TCC, and a process launchd starts has no way to

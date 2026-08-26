@@ -1,12 +1,21 @@
 # Installing the `/desk` skill
 
-`scripts/install.sh` copies `SKILL.md` to `~/.claude/skills/desk/SKILL.md`,
-which is where Claude Code looks for user skills on studio. To install it by
-hand instead:
+`scripts/install.sh` links this directory into every agent on the machine that
+has a skills directory:
 
 ```
-mkdir -p ~/.claude/skills/desk
-cp skill/desk/SKILL.md ~/.claude/skills/desk/SKILL.md
+~/.claude/skills/desk    -> <project>/skill/desk
+~/.pi/agent/skills/desk  -> <project>/skill/desk
+```
+
+One canonical copy, in the repo, beside the server it drives. Editing
+`SKILL.md` updates every agent at once, and the skill can never describe a
+`desk` command the installed server does not have.
+
+To link it by hand:
+
+```
+ln -sfn "$PWD/skill/desk" ~/.claude/skills/desk
 ```
 
 The skill runs `desk`, which `install.sh` puts at `~/.local/bin/desk`. That is
@@ -16,4 +25,5 @@ resolve its own directory instead.
 
 `disable-model-invocation: true` in the frontmatter is what makes the skill
 user-invoked only. The model cannot fire it on its own initiative; the user
-types `/desk`.
+types `/desk`. That also makes the `description` human-facing, which is why it
+reads as a one-line summary rather than a list of triggers.

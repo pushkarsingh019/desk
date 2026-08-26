@@ -7,4 +7,5 @@ launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
 rm -f "$HOME/Library/LaunchAgents/$LABEL.plist"
 rm -f "$HOME/.local/bin/desk"
 rm -rf "$HOME/.claude/skills/desk"
+rm -rf "$HOME/.pi/agent/skills/desk"
 echo "desk: removed. Your sheets are still in ${DESK_DATA_DIR:-$HOME/.desk}."

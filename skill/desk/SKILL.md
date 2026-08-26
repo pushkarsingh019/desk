@@ -1,6 +1,6 @@
 ---
 name: desk
-description: Put a figure on the user's desk — a web page on their tailnet where they look at agent-produced figures. Presents the newest figure, or one named by path.
+description: Put a figure on the desk — the page on your tailnet where you look at figures.
 disable-model-invocation: true
 argument-hint: "[path/to/figure.svg]"
 allowed-tools: Bash(desk:*)
@@ -8,54 +8,41 @@ allowed-tools: Bash(desk:*)
 
 # /desk
 
-Put a figure on the user's desk so they can look at it.
-
-Run this, and nothing else:
+Present a figure, then report the URL the command prints.
 
 ```
-desk present $ARGUMENTS
+desk present <the path the user gave, or nothing at all>
 ```
 
-If the shell cannot find `desk`, use `"$HOME/.local/bin/desk" present` instead.
+With no path the command picks the most recently modified figure under the
+current directory, which is the common case. It starts the server if the port
+is closed, so a cold machine works first time, and it prints the sheet's name,
+its version, and the desk URL.
 
-Then report the URL it prints. That is the whole job.
+Done when the command has exited zero and you have repeated its URL. On a
+nonzero exit, say the present failed and quote the error verbatim: a figure the
+user believes is on their desk but is not is the worst outcome this tool has.
 
-## What the command does
+If the shell cannot find `desk`, use `"$HOME/.local/bin/desk" present`.
 
-- With a path, it presents that file.
-- With no arguments, it presents the most recently modified figure under the
-  current directory — `.svg`, `.png`, `.pdf`, `.html`, or `.md`, ignoring
-  dotfiles and `*_tmp*`.
-- It starts the desk server if the port is closed, so a cold machine works on
-  the first try.
-- It prints the sheet name, its version, and the desk URL.
-- It exits nonzero and says why if anything fails.
+## Presenting once is enough
 
-## Rules
+The desk **watches** every path it has been given. Re-running the plotting
+script updates that sheet in place by itself, so present a figure the first
+time and afterwards let the file speak for itself.
 
-- **Never say a figure is on the desk unless the command exited zero.** If it
-  failed, say so and repeat its error verbatim. A figure the user believes is on
-  their desk but is not is the worst outcome this tool has.
-- **Do not pass a path the user did not ask for.** With no argument, let the
-  command choose; that is what it is for.
-- **Do not try to position, size, or group anything.** Layout is the user's
-  alone. A new sheet lands in the inbox and waits there until they drag it out.
-- Once a file has been presented once, the desk watches it. Re-running the
-  script that produced it updates the sheet by itself — do not present it again
-  just because it changed.
-- Do not report on whether the user looked. The desk tells you nothing about
-  that, and guessing is worse than silence.
+A new sheet lands in the **inbox** and waits there. Where it goes on the desk,
+how big it is, and what it sits next to are the user's to decide.
 
-## When it fails
+## What the errors mean
 
-- `no such file` — the path is wrong. Say so; do not guess another file.
-- `is not a desk file type` — the desk takes `.svg`, `.png`, `.pdf`, `.html`,
-  `.md`. If the figure is in another format, render it to a self-contained HTML
-  file and present that instead.
-- `found no figure to present` — nothing recent is lying around. Ask the user
-  for a path rather than hunting.
-- `could not reach the desk` — report it verbatim. The log is at
-  `~/Library/Logs/desk/desk.log`.
-- The desk server must run on the same machine as you. If you are working on a
-  box that is not `pushkar-studio`, say so: a sheet published from elsewhere
-  would go up once and then silently stop updating.
+- `is not a desk file type` — the desk takes `.svg`, `.png`, `.pdf`, `.html`
+  and `.md`. Render anything else to a self-contained HTML file and present
+  that instead.
+- `found no figure to present` — nothing recent is lying around. Ask for a path.
+- `no such file` — the path is wrong. Say so and let the user correct it.
+- `could not reach the desk` — quote it. The log is `~/Library/Logs/desk/desk.log`.
+
+The desk server runs on the machine you are running on. Working anywhere other
+than `pushkar-studio` means a sheet publishes once and then silently stops
+updating, so say where you are rather than letting a stale figure look fresh.

@@ -14,7 +14,6 @@ LOG_DIR="$HOME/Library/Logs/desk"
 LABEL="science.nairlab.desk"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 BIN_DIR="$HOME/.local/bin"
-SKILL_DIR="$HOME/.claude/skills/desk"
 
 if [ ! -x "$UV" ]; then
   echo "install: no uv at $UV. Install uv first, or set DESK_UV." >&2
@@ -56,7 +55,7 @@ echo "desk: port      $PORT"
 echo "desk: data      $DATA_DIR"
 echo "desk: logs      $LOG_DIR"
 
-mkdir -p "$LOG_DIR" "$DATA_DIR" "$BIN_DIR" "$HOME/Library/LaunchAgents" "$SKILL_DIR"
+mkdir -p "$LOG_DIR" "$DATA_DIR" "$BIN_DIR" "$HOME/Library/LaunchAgents"
 
 # A venv carries absolute paths in the shebang of every console script, so one
 # that was built somewhere else is quietly broken: the shebang points at an
@@ -91,8 +90,20 @@ exec "$PROJECT/scripts/desk" "\$@"
 LAUNCHEREOF
 chmod +x "$BIN_DIR/desk"
 
-echo "desk: installing the /desk skill -> $SKILL_DIR"
-cp "$PROJECT/skill/desk/SKILL.md" "$SKILL_DIR/SKILL.md"
+# The skill ships with the server it drives, so the repo holds the one copy and
+# every agent that can run it points at that. Editing the repo updates them all,
+# and a skill can never describe a `desk` command the installed server does not
+# have. Each tool that is present gets a link; absent ones are skipped.
+link_skill() {
+  target_dir="$1"
+  [ -d "$(dirname "$target_dir")" ] || return 0
+  rm -rf "$target_dir"
+  ln -sfn "$PROJECT/skill/desk" "$target_dir"
+  echo "desk: /desk skill -> $target_dir"
+}
+
+link_skill "$HOME/.claude/skills/desk"
+link_skill "$HOME/.pi/agent/skills/desk"
 
 # Resolve the tailnet name once, here, while running as the user. Under
 # launchd the Tailscale CLI is not reachable, so the server would otherwise
