@@ -1,0 +1,178 @@
+/* Two desks.
+ *
+ * `desk.css` owns structure and holds no colour of its own. This file holds
+ * nothing but colour, light, and which props are on. Switching skins therefore
+ * cannot move a sheet, change a gesture, or alter the desk's geometry — it is
+ * a change of material only, which is exactly what you want of a look you can
+ * flip at will while you are working.
+ *
+ * The invariant from `desk.css` binds every skin here: no rule in this file may
+ * paint over `.sheet-body`. Daylight and lamplight alike live either inside
+ * `#desktop` (behind every sheet) or on the paper margin.
+ */
+
+/* === DAY — a table in a good coffee shop ================================= */
+
+html[data-skin="day"] {
+  /* Past the desk is a café floor: warm terrazzo, softly lit from a window
+     up and to the left. Speckle is three offset dot layers on prime-ish
+     spacings, so no repeat is visible at any pan position. */
+  --floor-bg:
+    radial-gradient(circle at 20% 14%, rgba(255, 250, 238, .55), transparent 46%),
+    radial-gradient(circle 2.5px at 12px 22px, rgba(122, 108, 92, .32), transparent 100%),
+    radial-gradient(circle 3.5px at 58px 74px, rgba(158, 142, 120, .30), transparent 100%),
+    radial-gradient(circle 2px at 96px 38px, rgba(96, 84, 70, .26), transparent 100%),
+    linear-gradient(168deg, #ded5c6, #cec4b3 52%, #bdb3a2);
+  --floor-deep: #cec4b3;
+
+  /* A warm mid oak: light enough to read as a café table, dark enough that a
+     white figure still separates from it without help. */
+  --slab-bg:
+    radial-gradient(ellipse 78% 62% at 34% 18%, rgba(255, 248, 228, .30), transparent 72%),
+    linear-gradient(102deg, rgba(255, 252, 242, .14) 0 22%, transparent 52%),
+    radial-gradient(ellipse 46% 10% at 26% 30%, rgba(150, 104, 58, .34), transparent 72%),
+    radial-gradient(ellipse 38% 8% at 72% 68%, rgba(146, 100, 54, .30), transparent 72%),
+    linear-gradient(#c39a68, #b78d5c 54%, #a87f50);
+  --slab-shadow:
+    inset 0 2px 0 rgba(255, 250, 232, .55),
+    inset 0 -20px 24px -20px rgba(84, 52, 22, .40),
+    0 8px 14px rgba(74, 56, 34, .26),
+    0 34px 60px rgba(74, 56, 34, .30);
+
+  /* Oak grain is coarser and straighter than walnut, and paler against its
+     own ground. */
+  --grain-ink: #7c5330;
+  --grain-size: 660px;
+  --grain-opacity: .55;
+
+  /* Chrome goes light: pale canvas and warm bronze instead of leather and
+     brass, so the room stays airy. */
+  --leather: #8e7a5f;
+  --leather-lo: #7a674f;
+  --leather-edge: #a8926f;
+  --brass: #f3e3c2;
+  --brass-lo: #c9ab77;
+  --brass-ink: #4c3a1c;
+  --tray-well: linear-gradient(90deg, #a4967f 0%, #948673 82%, #837767 100%);
+  --alu-hi: #ded7cb;
+  --alu: #b8b0a2;
+  --alu-lo: #8a8274;
+
+  --ink: #f4ede0;
+  --ink-dim: #cbbfa9;
+  --accent: #ffcf6b;
+
+  /* Daylight is flat and from everywhere, so paper needs a crisper contact
+     line here than it does under a lamp — a light desk is where a white sheet
+     most easily stops reading as an object. */
+  --paper-edge: rgba(0, 0, 0, .16);
+  --paper-shadow:
+    0 1px 1px rgba(72, 46, 18, .40),
+    0 3px 6px rgba(72, 46, 18, .22),
+    0 12px 20px -8px rgba(60, 38, 14, .30);
+
+  /* Daylight: the cup as shot, lifted a touch and cooled slightly to sit in
+     window light rather than the tungsten it was photographed under. */
+  --cup-filter: brightness(1.08) saturate(.94) hue-rotate(-4deg);
+  --ceramic: linear-gradient(148deg, #ffffff 0%, #f7f9f4 34%, #dfe4d9 70%, #b9c0b2 100%);
+  --ceramic-handle-lit: #ffffff;
+  --ceramic-handle: #e8ece2;
+  --ceramic-handle-lo: #bcc2b4;
+  --steam-ink: rgba(255, 255, 255, .34);
+
+  --leaf-hi: #6fab54;
+  --leaf-mid: #55913f;
+  --leaf-lo: #3f6f36;
+  --pot: #cd7c4f;
+  --pot-lip: #ad5f38;
+  --soil: #4a352a;
+  --plant-shadow: rgba(96, 74, 44, .26);
+  --plant-a-opacity: 1;
+  --plant-b-opacity: 1;
+}
+
+/* === NIGHT — one warm lamp, late ========================================= */
+
+html[data-skin="night"] {
+  /* The room is not black, it is unlit: a deep warm brown that the desk's own
+     lamp spills onto at the near edge. */
+  --floor-bg: radial-gradient(120% 100% at 52% 62%, #241a13, #120c08 62%, #0b0705);
+  --floor-deep: #0b0705;
+
+  /* Dark walnut, and mostly in shadow. Nearly all of the light on this desk
+     comes from #lamp, which is a separate object inside the slab. */
+  --slab-bg:
+    linear-gradient(101deg, rgba(255, 228, 178, .05) 0 16%, transparent 44%),
+    radial-gradient(ellipse 42% 9% at 30% 34%, rgba(72, 44, 24, .45), transparent 70%),
+    radial-gradient(ellipse 34% 7% at 68% 71%, rgba(68, 40, 22, .40), transparent 70%),
+    linear-gradient(#2f2018, #271a13 55%, #1e140e);
+  --slab-shadow:
+    inset 0 2px 0 rgba(255, 214, 150, .16),
+    inset 0 -22px 26px -20px rgba(0, 0, 0, .65),
+    0 6px 10px rgba(0, 0, 0, .55),
+    0 34px 64px rgba(0, 0, 0, .70);
+
+  --grain-ink: #120b06;
+  --grain-size: 512px;
+  --grain-opacity: .8;
+
+  /* The lamp is a real object at a fixed spot on the desk: pan and the pool
+     goes with the wood, because the lamp is bolted to the table. It is a child
+     of #desktop, so it can never fall on a figure — only behind one. */
+  --lamp-size: 2600px;
+  --lamp-x: 760px;
+  --lamp-y: 560px;
+  --lamp-bg: radial-gradient(closest-side,
+    rgba(255, 206, 138, .30) 0%,
+    rgba(255, 186, 110, .17) 34%,
+    rgba(210, 140, 70, .07) 62%,
+    transparent 82%);
+
+  --brass: #f0cf8c;
+  --brass-lo: #b4894a;
+  --brass-ink: #33240c;
+  --tray-well: linear-gradient(90deg, #171009 0%, #100b06 82%, #080503 100%);
+  --alu-hi: #9b9184;
+  --alu: #6f675c;
+  --alu-lo: #443e37;
+
+  --ink: #f0e2cd;
+  --ink-dim: #a2907a;
+  --accent: #ffd08a;
+
+  --paper-shadow:
+    0 1px 2px rgba(0, 0, 0, .55),
+    0 4px 9px rgba(0, 0, 0, .34),
+    0 18px 30px -10px rgba(0, 0, 0, .52);
+
+  /* Lamplight: the same cup, darker and pushed warm, as if lit by the one
+     lamp on the desk. The steam is visible because it catches that lamp. */
+  --cup-filter: brightness(.8) sepia(.22) saturate(1.15);
+  --ceramic: linear-gradient(148deg, #f0eadd 0%, #ded7c7 34%, #b8b0a0 70%, #8d8677 100%);
+  --ceramic-handle-lit: #ddd2c0;
+  --ceramic-handle: #bfb3a0;
+  --ceramic-handle-lo: #948877;
+  --steam-ink: rgba(255, 224, 176, .34);
+
+  /* Foliage this far from the lamp is silhouette with a warm rim. */
+  --leaf-hi: #3a5c40;
+  --leaf-mid: #2b4630;
+  --leaf-lo: #1c3124;
+  --pot: #5a3a28;
+  --pot-lip: #43291c;
+  --soil: #1a120d;
+  --plant-shadow: rgba(0, 0, 0, .45);
+  --plant-a-opacity: 1;
+  --plant-b-opacity: 0;
+}
+
+/* The day skin's terrazzo is a tiled speckle, so its dot layers need a size;
+   the wash and the base do not. Kept out of the variable so `desk.css` never
+   has to know a floor can be tiled. */
+html[data-skin="day"] #viewport {
+  background-size: 100% 100%, 118px 118px, 137px 137px, 101px 101px, 100% 100%;
+}
+
+/* Under daylight the sheet header is on white paper on light wood, where a
+   grey filename all but disappears. */
+html[data-skin="day"] { --paper-ink: #574f46; --paper-rule: #ded8cf; }

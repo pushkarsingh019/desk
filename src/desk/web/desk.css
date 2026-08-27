@@ -1,20 +1,108 @@
-/* The desk. Everything is absolutely positioned; nothing on this page can
-   scroll or reflow, which is what lets an update swap an image without the
-   user's eyes losing their place. */
+/* The desk — a real, bounded slab of wood seen from directly above.
+ *
+ * Everything is absolutely positioned; nothing on this page can scroll or
+ * reflow, which is what lets an update swap an image without the user's eyes
+ * losing their place.
+ *
+ * One invariant governs every material decision here: NOTHING EVER PAINTS OVER
+ * `.sheet-body`, and `.sheet-body` carries no `filter`, `opacity`, or
+ * `mix-blend-mode`. The desk is warm and dark; the figures are not tinted by
+ * it, because the wood is always behind or beside the paper and never on top
+ * of it. Every material cue on a sheet lands on its 3px paper margin.
+ *
+ * The wood is expensive to rasterise at high zoom, so it cross-fades out above
+ * 2x (`body.zoomed-in`). At 8x you are reading a figure, not the desk.
+ *
+ * This file owns STRUCTURE — geometry, stacking, gestures, and the shape of
+ * every object on the desk. It owns no colours of its own: every material is a
+ * custom property, and `skins.css` is what sets them. The values below are the
+ * fallbacks, so the desk still looks like a desk if the skin fails to load.
+ */
 
 :root {
-  --felt: #16171a;
-  --felt-line: #202226;
+  /* The room past the desk's edge, and the slab standing in it. Each is a
+     whole `background` shorthand, so a skin can put a tiled café floor or a
+     single flat tone there without this file knowing which. */
+  --floor-bg: radial-gradient(120% 100% at 50% 40%, #191512, #0f0c0a);
+  --floor-deep: #0f0c0a;
+  --slab-bg:
+    radial-gradient(ellipse 70% 55% at 42% 26%, rgba(255, 236, 204, .10), transparent 68%),
+    linear-gradient(101deg, rgba(255, 246, 232, .055) 0 18%, transparent 46%),
+    radial-gradient(ellipse 42% 9% at 30% 34%, rgba(92, 58, 32, .45), transparent 70%),
+    radial-gradient(ellipse 34% 7% at 68% 71%, rgba(88, 54, 30, .40), transparent 70%),
+    linear-gradient(#6d4a30, #5a3b26 55%, #4b3020);
+  --slab-shadow:
+    inset 0 2px 0 rgba(255, 238, 208, .30),
+    inset 0 -22px 26px -20px rgba(24, 12, 4, .55),
+    0 6px 10px rgba(10, 6, 3, .45),
+    0 30px 56px rgba(10, 6, 3, .55);
+
+  /* The fibre plate is generated once by desk.js as a black alpha mask, so
+     each wood tints the same plate rather than needing its own. */
+  --grain-ink: #3a2415;
+  --grain-size: 512px;
+  --grain-opacity: 1;
+
+  /* The lamp pool, for skins that have one. Off by default. It sits at a fixed
+     spot in DESK coordinates, near where the desk opens, so panning moves the
+     pool with the wood — the lamp is bolted to the table. */
+  --lamp-bg: none;
+  --lamp-size: 0px;
+  --lamp-x: 820px;
+  --lamp-y: 620px;
+
+  /* Plants. */
+  --leaf-hi: #5b8a4a;
+  --leaf-mid: #467240;
+  --leaf-lo: #35603a;
+  --pot: #a9633c;
+  --pot-lip: #8c4e2d;
+  --soil: #2f2119;
+  --plant-shadow: rgba(20, 10, 4, .34);
+  --plant-a-opacity: 1;
+  --plant-b-opacity: 0;
+
+  /* paper and its ink */
   --paper: #ffffff;
-  --chrome: #24262b;
-  --chrome-edge: #33363d;
-  --ink: #e9e9ec;
-  --ink-dim: #8b8d95;
-  --accent: #d8b04a;
+  --paper-edge: rgba(0, 0, 0, .10);
+  --paper-ink: #6b6259;
+  --paper-rule: #e8e4de;
+
+  /* chrome: tan leather, brass, anodised aluminium */
+  --leather: #4a3524;
+  --leather-lo: #35251a;
+  --leather-edge: #66492f;
+  --brass: #e2c37e;
+  --brass-lo: #b18f45;
+  --brass-ink: #3b2d12;
+  --alu-hi: #bdb8b1;
+  --alu: #8e8982;
+  --alu-lo: #55514b;
+  --tray-well: linear-gradient(90deg, #17130f 0%, #100d0a 82%, #0a0806 100%);
+
+  /* The coffee: one photographed cup, graded into each skin's light. The
+     handle tones are sampled from latte.png's own rim, so a drawn handle and
+     a photographed cup read as one object. */
+  --cup-filter: none;
+  --ceramic: linear-gradient(148deg, #fbfcf8 0%, #eef1e9 34%, #d1d8ca 70%, #a9b0a4 100%);
+  --ceramic-handle-lit: #eaf1ec;
+  --ceramic-handle: #d1d8ca;
+  --ceramic-handle-lo: #a9b0a4;
+  --steam-ink: rgba(255, 248, 236, .30);
+
+  --ink: #ece6dc;
+  --ink-dim: #a2988a;
+  --accent: #ffd88a;
   --danger: #e2564a;
-  --panel: #1c1e22;
-  --radius: 8px;
-  --shadow: 0 8px 24px rgba(0, 0, 0, .45), 0 1px 2px rgba(0, 0, 0, .6);
+
+  --radius: 2px;
+
+  /* Three static layers. The first is contact darkening — the single most
+     load-bearing cue that a sheet is lying ON something. Never animated. */
+  --paper-shadow:
+    0 1px 1px rgba(38, 22, 10, .34),
+    0 3px 7px rgba(38, 22, 10, .20),
+    0 14px 24px -9px rgba(30, 16, 6, .34);
 }
 
 * { box-sizing: border-box; }
@@ -23,23 +111,36 @@ html, body {
   margin: 0;
   height: 100%;
   overflow: hidden;
-  background: var(--felt);
+  background: var(--floor-deep);
   color: var(--ink);
   font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   -webkit-font-smoothing: antialiased;
   overscroll-behavior: none;
 }
 
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 button {
   font: inherit;
-  color: var(--ink);
-  background: var(--chrome);
-  border: 1px solid var(--chrome-edge);
-  border-radius: 6px;
+  color: var(--brass-ink);
+  background: linear-gradient(var(--brass), var(--brass-lo));
+  border: 1px solid rgba(0, 0, 0, .35);
+  border-radius: 3px;
   padding: 4px 9px;
   cursor: pointer;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, .28);
 }
-button:hover { background: #2e3138; }
+button:hover { background: linear-gradient(#f0d79b, #c5a055); }
 button:active { transform: translateY(1px); }
 
 .pill {
@@ -47,17 +148,19 @@ button:active { transform: translateY(1px); }
   min-width: 18px;
   padding: 0 5px;
   border-radius: 9px;
-  background: #34373e;
-  color: var(--ink-dim);
+  background: rgba(0, 0, 0, .30);
+  color: rgba(255, 240, 210, .8);
   font-size: 11px;
   text-align: center;
 }
 
 .hint { color: var(--ink-dim); font-size: 12px; line-height: 1.5; padding: 10px 12px; margin: 0; }
-.hint code { background: #2a2d33; padding: 1px 4px; border-radius: 4px; }
+.hint code { background: rgba(0, 0, 0, .35); padding: 1px 4px; border-radius: 3px; }
 
-/* --- the desk surface --------------------------------------------------- */
+/* --- the floor, and the desk standing on it ----------------------------- */
 
+/* Past the edge of the desk is floor: deliberately featureless, so that its
+   being screen-fixed produces no parallax error against the panning slab. */
 #viewport {
   position: fixed;
   inset: 0;
@@ -65,10 +168,7 @@ button:active { transform: translateY(1px); }
   cursor: grab;
   user-select: none;
   -webkit-user-select: none;
-  background-image:
-    linear-gradient(var(--felt-line) 1px, transparent 1px),
-    linear-gradient(90deg, var(--felt-line) 1px, transparent 1px);
-  background-size: 64px 64px;
+  background: var(--floor-bg);
 }
 #viewport.panning { cursor: grabbing; }
 
@@ -82,21 +182,78 @@ button:active { transform: translateY(1px); }
   will-change: transform;
 }
 
-/* --- a sheet ---------------------------------------------------------- */
+/* The slab. A child of the transformed surface, so it pans and zooms with the
+   sheets for free. Its size in desk units is written by desk.js. */
+#desktop {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 0;
+  pointer-events: none;
+  border-radius: 14px;
+  background: var(--slab-bg);
+  /* The bullnose edge: a lit top lip, a roll into shadow at the far side, and
+     the slab's own shadow falling onto the floor. All static. */
+  box-shadow: var(--slab-shadow);
+}
 
+/* Fibre, generated once at boot into a data URL by desk.js. Cross-fades out
+   above 2x zoom, where a 512px plate would only be magnified into mush. */
+#grain {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--grain-ink);
+  -webkit-mask-image: var(--grain-plate);
+  mask-image: var(--grain-plate);
+  -webkit-mask-size: var(--grain-size) var(--grain-size);
+  mask-size: var(--grain-size) var(--grain-size);
+  -webkit-mask-repeat: repeat;
+  mask-repeat: repeat;
+  opacity: var(--grain-opacity);
+  transition: opacity 220ms linear;
+  pointer-events: none;
+}
+body.zoomed-in #grain { opacity: 0; }
+
+/* The lamp, for skins that light the desk rather than texture it. It lives
+   INSIDE the slab and therefore behind every sheet, which is the whole of why
+   a warm room never tints a white figure. */
+#lamp {
+  position: absolute;
+  left: var(--lamp-x);
+  top: var(--lamp-y);
+  width: var(--lamp-size);
+  height: var(--lamp-size);
+  margin: calc(var(--lamp-size) / -2) 0 0 calc(var(--lamp-size) / -2);
+  border-radius: 50%;
+  background: var(--lamp-bg);
+  pointer-events: none;
+}
+
+/* The edge a dragged sheet has come up against. One element, class-toggled,
+   never animated. */
+#desktop.edge-n { box-shadow: inset 0 3px 0 var(--accent), var(--slab-shadow); }
+#desktop.edge-s { box-shadow: inset 0 -3px 0 var(--accent), var(--slab-shadow); }
+#desktop.edge-w { box-shadow: inset 3px 0 0 var(--accent), var(--slab-shadow); }
+#desktop.edge-e { box-shadow: inset -3px 0 0 var(--accent), var(--slab-shadow); }
+
+/* --- a sheet: paper lying on the desk ---------------------------------- */
+
+/* The 3px padding is a real paper margin. It is what makes the invariant at
+   the top of this file structural rather than a promise: every border,
+   highlight and ring lands here, and never on the figure. */
 .sheet, .pile {
   position: absolute;
   top: 0;
   left: 0;
-  background: var(--chrome);
-  border: 1px solid var(--chrome-edge);
+  padding: 3px;
+  background: var(--paper);
   border-radius: var(--radius);
-  box-shadow: var(--shadow);
+  box-shadow: var(--paper-shadow);
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  /* Only the transform is animated, and only when the user is not dragging;
-     nothing here can push a neighbour around. */
 }
 
 .sheet-chrome {
@@ -104,22 +261,23 @@ button:active { transform: translateY(1px); }
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 0 6px;
-  background: linear-gradient(#2b2e34, #24262b);
-  border-bottom: 1px solid var(--chrome-edge);
+  padding: 0 2px 1px;
+  background: var(--paper);
+  border-bottom: 1px solid var(--paper-rule);
   cursor: move;
   user-select: none;
 }
 
 .sheet-name {
   flex: 1;
-  font-size: 11px;
-  color: var(--ink-dim);
+  font-size: 10px;
+  letter-spacing: .02em;
+  color: var(--paper-ink);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.sheet-version { font-size: 10px; color: #62656d; }
+.sheet-version { font-size: 10px; color: #a9a29a; }
 
 .sheet-grow,
 .sheet-trash {
@@ -128,17 +286,23 @@ button:active { transform: translateY(1px); }
   line-height: 16px;
   background: transparent;
   border: none;
-  color: #62656d;
-  border-radius: 4px;
+  color: #a9a29a;
+  border-radius: 3px;
+  text-shadow: none;
+  opacity: .35;
 }
+.sheet:hover .sheet-grow,
+.sheet:hover .sheet-trash { opacity: 1; }
 .sheet-trash:hover { color: #fff; background: var(--danger); }
-.sheet-grow:hover { color: #fff; background: #3a3d45; }
+.sheet-grow:hover { color: #2b2721; background: #e4e0da; }
 
+/* NOTHING paints over this element. No filter, no opacity, no blend mode. */
 .sheet-body {
   position: relative;
   flex: 1;
   min-height: 0;
   background: var(--paper);
+  border: 1px solid var(--paper-edge);
   overflow: hidden;
 }
 
@@ -176,10 +340,10 @@ button:active { transform: translateY(1px); }
 body.dragging .sheet .sheet-shield,
 body.dragging .pile .sheet-shield { display: block; }
 
-/* The active sheet says so: its chrome takes the accent. */
-.sheet.active { border-color: var(--accent); }
-.sheet.active .sheet-chrome { background: linear-gradient(#3b3524, #2b2718); }
-.sheet.active .sheet-name { color: var(--accent); }
+/* The active sheet says so on its margin, as an inset ring — an outset one
+   would change the sheet's footprint on the desk. */
+.sheet.active { box-shadow: var(--paper-shadow), inset 0 0 0 2px rgba(198, 148, 58, .65); }
+.sheet.active .sheet-name { color: #7a5a1e; }
 
 .resize-handle {
   position: absolute;
@@ -188,19 +352,23 @@ body.dragging .pile .sheet-shield { display: block; }
   width: 16px;
   height: 16px;
   cursor: nwse-resize;
-  background: linear-gradient(-45deg, transparent 45%, var(--ink-dim) 45%, var(--ink-dim) 55%, transparent 55%);
-  opacity: .5;
+  background: linear-gradient(-45deg, transparent 45%, #b6aea4 45%, #b6aea4 55%, transparent 55%);
+  opacity: .55;
 }
 .resize-handle:hover { opacity: 1; }
 
-.sheet.dragging, .pile.dragging { box-shadow: 0 18px 40px rgba(0, 0, 0, .6); }
+/* A lifted sheet throws a longer, softer shadow and loses its contact line. */
+.sheet.dragging, .pile.dragging {
+  box-shadow: 0 26px 44px -10px rgba(20, 10, 4, .60), 0 6px 14px rgba(20, 10, 4, .35);
+}
 
 /* The update ring. box-shadow only: it paints outside the box and so cannot
-   move, resize, or reflow anything. */
+   move, resize, or reflow anything. Warm, so it reads as light falling on the
+   paper rather than as the paper having moved. */
 @keyframes desk-ring {
-  0%   { box-shadow: var(--shadow), 0 0 0 0 rgba(216, 176, 74, .95); }
-  35%  { box-shadow: var(--shadow), 0 0 0 5px rgba(216, 176, 74, .85); }
-  100% { box-shadow: var(--shadow), 0 0 0 12px rgba(216, 176, 74, 0); }
+  0%   { box-shadow: var(--paper-shadow), 0 0 0 0 rgba(255, 216, 138, .95); }
+  35%  { box-shadow: var(--paper-shadow), 0 0 0 5px rgba(255, 216, 138, .85); }
+  100% { box-shadow: var(--paper-shadow), 0 0 0 12px rgba(255, 216, 138, 0); }
 }
 .updated { animation: desk-ring 600ms ease-out; }
 
@@ -209,37 +377,35 @@ body.dragging .pile .sheet-shield { display: block; }
   min-width: 18px;
   padding: 0 6px;
   border-radius: 9px;
-  background: var(--accent);
-  color: #221c08;
+  background: linear-gradient(var(--brass), var(--brass-lo));
+  color: var(--brass-ink);
   font-size: 11px;
   font-weight: 600;
   line-height: 16px;
   text-align: center;
 }
 
-/* The stacked edges that make a pile read as more than one sheet. They are
-   drawn outside the pile's own box, so the pile must not clip — its content is
-   already clipped by `.sheet-body`. */
+/* A pile is a stack of paper: the sheets underneath show at the edges, each
+   very slightly askew, each with its own contact shadow. Drawn outside the
+   pile's own box, so the pile must not clip — its content is already clipped
+   by `.sheet-body`. */
 .pile { overflow: visible; }
-.pile > .sheet-body {
-  border-bottom-left-radius: var(--radius);
-  border-bottom-right-radius: var(--radius);
-}
+.pile > .sheet-body { border-radius: 0; }
 .pile::before, .pile::after {
   content: "";
   position: absolute;
   inset: 0;
-  border: 1px solid var(--chrome-edge);
   border-radius: var(--radius);
-  background: #202227;
+  background: #f6f3ee;
+  box-shadow: 0 1px 1px rgba(38, 22, 10, .30), 0 8px 16px -6px rgba(30, 16, 6, .34);
   z-index: -1;
 }
-.pile::before { transform: translate(5px, 5px); }
-.pile::after  { transform: translate(10px, 10px); }
+.pile::before { transform: translate(4px, 5px) rotate(-.8deg); }
+.pile::after  { transform: translate(9px, 10px) rotate(1.1deg); }
 
 .pile-open-frame {
   position: absolute;
-  border: 1px dashed rgba(216, 176, 74, .5);
+  border: 1px dashed rgba(255, 216, 138, .45);
   border-radius: 12px;
   pointer-events: none;
 }
@@ -255,18 +421,18 @@ body.dragging .pile .sheet-shield { display: block; }
   pointer-events: auto;
   padding: 2px 8px;
   font-size: 11px;
-  color: #221c08;
-  background: var(--accent);
-  border: none;
   border-radius: 9px;
   box-shadow: 0 1px 4px rgba(0, 0, 0, .5);
 }
-.pile-collapse:hover { background: #e6c264; }
 
-.drop-target { outline: 2px solid var(--accent); outline-offset: 2px; }
+.drop-target { outline: 2px solid var(--accent); outline-offset: 3px; }
 
-/* --- inbox ------------------------------------------------------------ */
+/* --- inbox: the in-tray at the near-left edge --------------------------- */
 
+/* Anodised aluminium walls around a well of shadowed wood. The geometry is
+   unchanged — 176px, same strip — so the drag-out gesture is untouched.
+   `backdrop-filter` is deliberately gone: it forced a snapshot of the moving
+   desk on every pan frame, for a blur nobody was looking at. */
 #inbox {
   position: fixed;
   top: 0;
@@ -275,9 +441,10 @@ body.dragging .pile .sheet-shield { display: block; }
   width: 176px;
   display: flex;
   flex-direction: column;
-  background: rgba(20, 21, 24, .92);
-  border-right: 1px solid var(--chrome-edge);
-  backdrop-filter: blur(8px);
+  background: var(--tray-well);
+  border-right: 3px solid transparent;
+  border-image: linear-gradient(180deg, var(--alu-hi), var(--alu) 40%, var(--alu-lo)) 1;
+  box-shadow: 6px 0 18px rgba(0, 0, 0, .5);
   z-index: 40;
 }
 #inbox header {
@@ -285,16 +452,25 @@ body.dragging .pile .sheet-shield { display: block; }
   align-items: center;
   gap: 8px;
   padding: 10px 12px;
-  border-bottom: 1px solid var(--chrome-edge);
+  background: linear-gradient(180deg, var(--alu-hi), var(--alu) 55%, #7b766f);
+  border-bottom: 1px solid rgba(0, 0, 0, .45);
 }
-.inbox-title { font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-dim); }
+/* Engraved, not printed. */
+.inbox-title {
+  font-size: 11px;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: #3d3a35;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, .45);
+}
+#inbox header .pill { background: rgba(0, 0, 0, .22); color: #2f2c28; }
 #inbox-items {
   flex: 1;
   overflow-y: auto;
-  padding: 8px;
+  padding: 10px 8px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
   user-select: none;
   -webkit-user-select: none;
 }
@@ -304,15 +480,17 @@ body.dragging .pile .sheet-shield { display: block; }
      waiting sheets into unreadable slivers instead of letting the strip
      scroll. */
   flex: 0 0 auto;
-  border: 1px solid var(--chrome-edge);
-  border-radius: 6px;
+  padding: 2px;
+  border-radius: var(--radius);
   overflow: hidden;
-  background: var(--chrome);
+  background: var(--paper);
+  box-shadow: 0 1px 1px rgba(0, 0, 0, .45), 0 6px 12px -4px rgba(0, 0, 0, .5);
   cursor: grab;
 }
 .inbox-item .preview {
   height: 92px;
   background: var(--paper);
+  border: 1px solid var(--paper-edge);
   display: block;
   width: 100%;
   object-fit: contain;
@@ -322,15 +500,15 @@ body.dragging .pile .sheet-shield { display: block; }
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #8a8d95;
+  color: #8a8378;
   font: 11px ui-monospace, SFMono-Regular, Menlo, monospace;
-  background: #f4f4f6;
+  background: #f6f4f0;
 }
 .inbox-item .label {
   display: block;
-  padding: 5px 7px;
-  font-size: 11px;
-  color: var(--ink-dim);
+  padding: 4px 4px 2px;
+  font-size: 10px;
+  color: var(--paper-ink);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -341,59 +519,90 @@ body.dragging .pile .sheet-shield { display: block; }
   position: fixed;
   z-index: 200;
   pointer-events: none;
-  opacity: .85;
-  border-radius: 6px;
+  opacity: .9;
+  border-radius: var(--radius);
   overflow: hidden;
-  box-shadow: var(--shadow);
+  box-shadow: 0 26px 44px -10px rgba(20, 10, 4, .6);
   background: var(--paper);
 }
 
-/* --- hud, trash ------------------------------------------------------- */
+/* --- hud: a stitched leather strip with brass keys ---------------------- */
 
+/* Sits to the left of the mug, which owns the near-right corner. */
 #hud {
   position: fixed;
-  right: 12px;
-  bottom: 12px;
+  right: 168px;
+  bottom: 14px;
   z-index: 40;
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px;
-  background: rgba(20, 21, 24, .92);
-  border: 1px solid var(--chrome-edge);
-  border-radius: 10px;
-  backdrop-filter: blur(8px);
+  padding: 7px;
+  background: linear-gradient(var(--leather), var(--leather-lo));
+  border: 1px solid rgba(0, 0, 0, .5);
+  border-radius: 5px;
+  box-shadow:
+    inset 0 1px 0 var(--leather-edge),
+    inset 0 0 0 1px rgba(255, 220, 170, .05),
+    0 8px 20px rgba(0, 0, 0, .5);
 }
-#zoom-readout { min-width: 44px; text-align: right; color: var(--ink-dim); font-size: 11px; padding-right: 4px; }
+/* the stitch */
+#hud::before {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  border: 1px dashed rgba(255, 226, 180, .22);
+  border-radius: 3px;
+  pointer-events: none;
+}
+#zoom-readout {
+  min-width: 44px;
+  text-align: right;
+  color: var(--brass);
+  font-size: 11px;
+  padding-right: 4px;
+  text-shadow: 0 1px 0 rgba(0, 0, 0, .5);
+}
+#hud .pill { background: rgba(0, 0, 0, .3); color: rgba(255, 240, 210, .85); }
+
+/* --- trash: the wastebasket mouth, seen from above ---------------------- */
 
 #trash-drop {
   position: fixed;
-  right: 12px;
-  bottom: 60px;
+  right: 46px;
+  bottom: 150px;
   z-index: 45;
   display: none;
-  padding: 22px 26px;
-  border: 2px dashed var(--ink-dim);
-  border-radius: 12px;
-  color: var(--ink-dim);
-  background: rgba(20, 21, 24, .9);
+  width: 112px;
+  height: 84px;
+  line-height: 84px;
+  text-align: center;
+  font-size: 11px;
+  letter-spacing: .04em;
+  color: rgba(255, 235, 205, .55);
+  border-radius: 50%;
+  background: radial-gradient(ellipse at 50% 42%, #050403 42%, #17110c 62%, #241a12 78%, rgba(36,26,18,0) 82%);
+  box-shadow: inset 0 -3px 6px rgba(255, 226, 180, .10);
 }
 body.dragging #trash-drop { display: block; }
-#trash-drop.armed { border-color: var(--danger); color: #fff; background: rgba(226, 86, 74, .35); }
+#trash-drop.armed {
+  color: #fff;
+  box-shadow: inset 0 0 0 2px var(--danger), 0 0 22px rgba(226, 86, 74, .45);
+}
 
 #trash-panel {
   position: fixed;
-  right: 12px;
-  bottom: 60px;
+  right: 46px;
+  bottom: 150px;
   z-index: 50;
   width: 260px;
   max-height: 60vh;
   display: flex;
   flex-direction: column;
-  background: var(--panel);
-  border: 1px solid var(--chrome-edge);
-  border-radius: 10px;
-  box-shadow: var(--shadow);
+  background: linear-gradient(var(--leather), var(--leather-lo));
+  border: 1px solid rgba(0, 0, 0, .5);
+  border-radius: 5px;
+  box-shadow: inset 0 1px 0 var(--leather-edge), 0 12px 30px rgba(0, 0, 0, .6);
 }
 #trash-panel[hidden] { display: none; }
 #trash-panel header {
@@ -401,24 +610,234 @@ body.dragging #trash-drop { display: block; }
   align-items: center;
   justify-content: space-between;
   padding: 8px 10px;
-  border-bottom: 1px solid var(--chrome-edge);
+  border-bottom: 1px solid rgba(0, 0, 0, .4);
   font-size: 11px;
-  letter-spacing: .1em;
+  letter-spacing: .14em;
   text-transform: uppercase;
-  color: var(--ink-dim);
+  color: var(--brass);
 }
-#trash-panel header button { border: none; background: transparent; padding: 0 6px; }
+#trash-panel header button {
+  border: none;
+  background: transparent;
+  padding: 0 6px;
+  color: var(--brass);
+  text-shadow: none;
+}
+#trash-panel header button:hover { background: rgba(255, 226, 180, .12); }
 #trash-items { overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+#trash-panel .hint { color: #cfc3ae; }
 .trash-item { display: flex; align-items: center; gap: 8px; font-size: 12px; }
-.trash-item .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-dim); }
+.trash-item .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #cfc3ae; }
 
-/* --- fullscreen ------------------------------------------------------- */
+/* --- the coffee -------------------------------------------------------- */
+
+/* The near-right corner, the corner nearest your hand. Screen-fixed on
+   purpose: an indicator you can pan away from is not an indicator. */
+#mug {
+  position: fixed;
+  right: 54px;
+  bottom: 20px;
+  width: 104px;
+  height: 104px;
+  z-index: 60;
+  pointer-events: none;
+}
+
+body.offline #mug { z-index: 110; }
+
+/* The cup stands on the desk, so it casts a real shadow away from the same
+   light that falls across the slab. */
+#mug-shadow {
+  position: absolute;
+  left: 3px;
+  top: 7px;
+  width: 116px;
+  height: 110px;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, rgba(22, 11, 4, .55), rgba(22, 11, 4, .26) 64%, transparent 80%);
+  filter: blur(5px);
+}
+
+/* The cup is a photograph masked to its rim circle (see web/ASSETS.md). Drawn
+   gradients could not make a convincing crema or latte art at this size, so
+   this is the one thing on the desk that is not vector.
+
+   Every skin shows the same cup and grades it into its own light with
+   --cup-filter. That is also how the cup goes cold: a filter is the only
+   handle a photograph gives you, and "drained of colour and darker" is exactly
+   what cold coffee looks like from above. */
+/* The rim is drawn and the coffee is photographed. Masking the photo at the
+   cup's full rim would mean keying out table speckle, which leaves a ragged
+   edge; masking it just inside the rim leaves a perfect circle. So the photo
+   stops there and CSS draws the ceramic around it — which has the further
+   virtue that the rim and the handle are now the same material, drawn the
+   same way, instead of a drawn handle butting against a photographed cup. */
+#mug-body {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: var(--ceramic);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .45), inset 0 1px 0 rgba(255, 255, 255, .6);
+  filter: var(--cup-filter);
+  transition: filter 1400ms ease-out;
+}
+#mug-body::before {
+  content: "";
+  position: absolute;
+  inset: 6px;
+  border-radius: 50%;
+  background: url("/latte.png") center / cover no-repeat;
+  /* The inner wall throws a shadow onto the surface, which is what stops the
+     coffee reading as a flat sticker pasted into a ring. */
+  box-shadow: inset 0 2px 5px rgba(24, 12, 4, .45);
+}
+
+/* The skin that forms on coffee left to go cold. */
+#mug-skin {
+  position: absolute;
+  inset: 5%;
+  border-radius: 50%;
+  border: 1px solid rgba(190, 184, 172, .45);
+  opacity: 0;
+  transition: opacity 1200ms ease-out;
+}
+
+/* A ring concentric with the cup, of which only the right quarter is painted.
+   Sized so its inner edge meets the rim exactly, which is what makes the
+   handle read as part of the cup rather than as a crescent floating beside it. */
+#mug-handle {
+  position: absolute;
+  left: -18px;
+  top: -18px;
+  width: 140px;
+  height: 140px;
+  border-radius: 50%;
+  /* A 54-degree arc at three o'clock, lit along the same axis as the rim. */
+  background: conic-gradient(from 74deg, transparent 0deg,
+    var(--ceramic-handle) 3deg, var(--ceramic-handle-lit) 18deg,
+    var(--ceramic-handle-lo) 34deg, transparent 38deg);
+  /* The ring runs from the cup's rim outward, so the handle meets the cup. */
+  -webkit-mask: radial-gradient(circle at 50% 50%, transparent 0 51px, #000 52px 64px, transparent 65px);
+  mask: radial-gradient(circle at 50% 50%, transparent 0 51px, #000 52px 64px, transparent 65px);
+  filter: drop-shadow(1px 2px 3px rgba(0, 0, 0, .45));
+  transition: filter 900ms ease-out;
+}
+
+/* Three ribbons on mutually prime periods, so the plume never resyncs into a
+   visible pulse. Transform and opacity only — compositor work, on a ~120x170
+   screen-fixed box, which is nothing against twenty panning sheets. */
+#steam {
+  position: absolute;
+  left: 50%;
+  bottom: 78px;
+  width: 120px;
+  height: 170px;
+  transform: translateX(-50%);
+  overflow: visible;
+  fill: none;
+  stroke: var(--steam-ink);
+  stroke-width: 8;
+  stroke-linecap: round;
+  filter: blur(3.5px);
+  transition: opacity 1200ms ease-out;
+  -webkit-mask-image: linear-gradient(to top, #000 8%, transparent 94%);
+  mask-image: linear-gradient(to top, #000 8%, transparent 94%);
+}
+#steam path {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+  opacity: 0;
+  animation: steam-rise 5200ms ease-out infinite;
+}
+#steam path:nth-child(2) { animation-duration: 6900ms; animation-delay: -2300ms; }
+#steam path:nth-child(3) { animation-duration: 8100ms; animation-delay: -4700ms; }
+
+@keyframes steam-rise {
+  0%   { opacity: 0;   transform: translate3d(0, 6px, 0) scaleX(.6); }
+  20%  { opacity: .78; }
+  100% { opacity: 0;   transform: translate3d(7px, -54px, 0) scaleX(1.35); }
+}
+
+/* Dropped. The steam wafts away over a second rather than freezing mid-air —
+   a one-second blip in the stream must not flash at you — and the coffee goes
+   cold. Cold means still, which is the whole point of the metaphor. */
+body.offline #steam { opacity: 0; }
+body.offline #mug-body { filter: saturate(.26) brightness(.6) contrast(.94); }
+body.offline #mug-handle { filter: saturate(.26) brightness(.66) drop-shadow(0 2px 3px rgba(0, 0, 0, .45)); }
+body.offline #mug-skin { opacity: 1; }
+
+/* A quiet cup is a quiet alarm, so a long outage escalates. One element, one
+   animated shadow, and only once the stream has been gone for 20 seconds. */
+@keyframes mug-alarm {
+  0%, 100% { box-shadow: 0 1px 2px rgba(0, 0, 0, .35), 0 0 0 0 rgba(226, 86, 74, 0); }
+  50%      { box-shadow: 0 1px 2px rgba(0, 0, 0, .35), 0 0 0 7px rgba(226, 86, 74, .38); }
+}
+body.stale #mug-body { animation: mug-alarm 3s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  #steam path { animation: none; opacity: .3; }
+  body.stale #mug-body { animation: none; box-shadow: 0 1px 2px rgba(0, 0, 0, .35), 0 0 0 5px rgba(226, 86, 74, .38); }
+}
+
+/* --- plants ------------------------------------------------------------- */
+
+/* Decoration, and nothing else: no hit area, no state, no behaviour. Each sits
+   at a window corner and is mostly cropped by it, so it reads as standing at
+   the desk's far edge instead of covering the work. A skin that wants no
+   plants sets its opacity to 0 rather than this file knowing about skins. */
+.plant {
+  position: fixed;
+  z-index: 55;
+  pointer-events: none;
+  transition: opacity 300ms ease;
+}
+.plant svg { display: block; width: 100%; height: 100%; overflow: visible; }
+
+#plant-defs { position: absolute; width: 0; height: 0; }
+
+#plant-a {
+  top: -96px;
+  right: -84px;
+  width: 300px;
+  height: 300px;
+  opacity: var(--plant-a-opacity);
+}
+/* Clear of the 176px tray, so the plant stands beside the inbox rather than
+   inside it. */
+#plant-b {
+  bottom: -66px;
+  left: 214px;
+  width: 200px;
+  height: 200px;
+  opacity: var(--plant-b-opacity);
+}
+
+/* A soft pool cast away from the light. Blurred, offset, and weak — an opaque
+   ellipse under a plant reads as a saucer, which is what it was doing. */
+.plant-shadow { fill: var(--plant-shadow); filter: blur(13px); }
+
+.plant .pot { fill: var(--pot); }
+.plant .pot-lip { fill: var(--pot-lip); }
+.plant .soil { fill: var(--soil); }
+
+/* Colour reaches the blade by inheriting `fill` through the <use> shadow tree;
+   the venation inside the leaf is translucent black and needs no help. */
+.plant .leaf-back use { fill: var(--leaf-lo); }
+.plant .leaf-front use { fill: var(--leaf-hi); }
+.plant .leaf-front use.deep { fill: var(--leaf-mid); }
+/* The hindmost leaves sit under the pot, so the plant reads as a crown of
+   leaves around a rim rather than as leaves glued to a disc. */
+.plant .leaf-back { opacity: .9; }
+
+/* --- fullscreen: the sheet under the lamp ------------------------------- */
 
 #fullscreen {
   position: fixed;
   inset: 0;
   z-index: 100;
-  background: rgba(8, 8, 10, .97);
+  background:
+    radial-gradient(ellipse 60% 55% at 50% 45%, rgba(255, 226, 178, .07), transparent 70%),
+    rgba(12, 9, 7, .975);
 }
 #fullscreen[hidden] { display: none; }
 #fullscreen-stage { position: absolute; inset: 0; overflow: hidden; cursor: grab; }
@@ -429,7 +848,7 @@ body.dragging #trash-drop { display: block; }
   left: 0;
   transform-origin: 0 0;
   background: var(--paper);
-  box-shadow: 0 20px 60px rgba(0, 0, 0, .7);
+  box-shadow: 0 2px 3px rgba(0, 0, 0, .5), 0 44px 84px -22px rgba(0, 0, 0, .8);
 }
 #fullscreen-holder img,
 #fullscreen-holder iframe { display: block; width: 100%; height: 100%; border: 0; }
@@ -440,23 +859,17 @@ body.dragging #trash-drop { display: block; }
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 8px;
-  background: rgba(20, 21, 24, .92);
-  border: 1px solid var(--chrome-edge);
-  border-radius: 10px;
+  padding: 7px 8px;
+  background: linear-gradient(var(--leather), var(--leather-lo));
+  border: 1px solid rgba(0, 0, 0, .5);
+  border-radius: 5px;
+  box-shadow: inset 0 1px 0 var(--leather-edge);
 }
-#fullscreen-name { font-size: 12px; color: var(--ink-dim); max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-#connection {
-  position: fixed;
-  left: 50%;
-  top: 12px;
-  transform: translateX(-50%);
-  z-index: 120;
-  padding: 5px 12px;
-  border-radius: 999px;
-  background: rgba(226, 86, 74, .9);
-  color: #fff;
+#fullscreen-name {
   font-size: 12px;
+  color: var(--brass);
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-#connection[hidden] { display: none; }

@@ -5,8 +5,9 @@ them in code, tests, commits, and tickets; do not introduce synonyms.
 
 ## Nouns
 
-**Desk** — the single infinite pannable, zoomable canvas. There is exactly one.
-Not a board, not a canvas, not a workspace.
+**Desk** — the single bounded pannable, zoomable slab, 4800 × 3200 desk units,
+seen from directly above. There is exactly one. Not a board, not a canvas, not
+a workspace.
 
 **Sheet** — one figure on the desk. A sheet has a position, a size, a z-order,
 and an ordered list of versions. It is the unit the user drags, resizes, piles,
@@ -33,6 +34,14 @@ another, fanned open by clicking, disassembled by pulling a sheet out.
 **Tombstone** — the record that a source path was trashed. A tombstoned path is
 no longer watched and will not be re-created by a file change. An explicit
 publish clears it.
+
+**Floor** — what lies past the desk's edge. Nothing is ever placed on the
+floor; it exists so that an edge reads as an edge.
+
+**Skin** — one of the desk's materials: `day` or `night`. A skin sets colour,
+light, and which props are present, and nothing else. It cannot move a sheet,
+change a gesture, or alter the desk's geometry. Which skin is showing is a
+property of the browser, not of the desk, so it never reaches the server.
 
 **Home** — the desk's origin viewport, restored by the `0` key.
 
@@ -68,3 +77,9 @@ Nothing auto-places, auto-tiles, or reflows.
 
 4. **The server runs on the same machine as the agent.** Watching is a
    filesystem operation. The *user* may watch from anywhere on the tailnet.
+
+5. **The desk has edges.** Panning stops at them and sheets clamp to the slab;
+   nothing is ever placed on the floor. This replaced the infinite canvas
+   deliberately — an edge is a landmark, which a featureless infinite plane
+   never gave us. The cost is real and accepted: a full desk must be curated
+   with piles and the trash, not escaped from.

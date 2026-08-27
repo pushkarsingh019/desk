@@ -5,12 +5,27 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Desk</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='%23c9a227'/><rect x='3' y='4' width='10' height='8' rx='1' fill='%23fff'/></svg>">
+<script>
+  /* Applied before first paint, so the desk never flashes the wrong material.
+     The choice is a property of this browser, not of the desk, so it lives in
+     localStorage and the server never learns about it. */
+  (function () {
+    var ok = ['day', 'night'], s = null;
+    try { s = new URLSearchParams(location.search).get('skin') || localStorage.getItem('desk.skin'); } catch (e) {}
+    document.documentElement.dataset.skin = ok.indexOf(s) >= 0 ? s : 'day';
+  })();
+</script>
 <link rel="stylesheet" href="/desk.css">
+<link rel="stylesheet" href="/skins.css">
 </head>
 <body>
 
 <div id="viewport">
-  <div id="surface"></div>
+  <div id="surface">
+    <!-- The desk itself: a real, bounded slab that pans and zooms with the
+         sheets, because it is a child of the same transformed element. -->
+    <div id="desktop"><div id="grain"></div><div id="lamp"></div></div>
+  </div>
 </div>
 
 <aside id="inbox" aria-label="Inbox">
@@ -26,6 +41,7 @@
   <button id="btn-home" title="Home (0)">home</button>
   <button id="btn-overview" title="Overview — fit everything (f)">overview</button>
   <button id="btn-trash" title="Trash">trash <span id="trash-count" class="pill">0</span></button>
+  <button id="btn-skin" title="Change the look (t)">day</button>
   <span id="zoom-readout">100%</span>
 </div>
 
@@ -49,7 +65,83 @@
   </div>
 </div>
 
-<div id="connection" hidden>reconnecting…</div>
+<!-- The coffee. It is the connection indicator: steam while the stream is
+     live, still and cold when it drops. `aria-live` carries the same fact in
+     words for anything that cannot see steam. -->
+<div id="mug" title="Connected">
+  <div id="mug-shadow"></div>
+  <!-- The cup is a photograph masked to its rim; see web/ASSETS.md. Drawn
+       gradients could not make a convincing crema at this size. -->
+  <div id="mug-body"><i id="mug-skin"></i></div>
+  <div id="mug-handle"></div>
+  <svg id="steam" viewBox="0 0 120 170" aria-hidden="true">
+    <path d="M40 165 C24 128 56 118 40 82 C28 54 48 36 42 8"/>
+    <path d="M60 165 C44 126 76 116 60 78 C48 50 68 32 62 4"/>
+    <path d="M80 165 C64 128 96 118 80 82 C68 54 88 36 82 8"/>
+  </svg>
+</div>
+<svg id="plant-defs" aria-hidden="true">
+  <defs>
+    <!-- One monstera leaf, base at the origin, tip pointing north. Every leaf
+         on the page is this group rotated about its own pot. The blade takes
+         `fill: inherit`, so each <use> chooses its own green; the venation is
+         translucent black, which reads on every green a skin can pick. -->
+    <g id="leaf">
+      <path fill="inherit" stroke="rgba(0, 0, 0, .18)" stroke-width="1.5"
+        d="M0 0 C-10 -16 -26 -24 -36 -38 L-20 -42 L-36 -50
+           C-44 -62 -44 -80 -36 -94 L-22 -90 L-32 -102 C-22 -114 -10 -118 0 -118
+           C10 -118 22 -114 32 -102 L22 -90 L36 -94 C44 -80 44 -62 36 -50
+           L20 -42 L36 -38 C26 -24 10 -16 0 0 Z"/>
+      <path fill="none" stroke="rgba(0, 0, 0, .20)" stroke-width="2.4" stroke-linecap="round"
+        d="M0 -10 L0 -104
+           M0 -30 L-23 -44 M0 -30 L23 -44
+           M0 -56 L-27 -70 M0 -56 L27 -70
+           M0 -80 L-22 -92 M0 -80 L22 -92"/>
+      <path fill="none" stroke="rgba(255, 255, 255, .12)" stroke-width="1.2" stroke-linecap="round"
+        d="M-2 -12 L-2 -102"/>
+    </g>
+  </defs>
+</svg>
+
+<div id="plant-a" class="plant" aria-hidden="true">
+  <svg viewBox="0 0 260 260">
+    <ellipse class="plant-shadow" cx="142" cy="152" rx="74" ry="64"/>
+    <g class="leaf-back">
+      <use href="#leaf" transform="translate(130 140) rotate(-150) scale(.86)"/>
+      <use href="#leaf" transform="translate(130 140) rotate(158) scale(.92)"/>
+      <use href="#leaf" transform="translate(130 140) rotate(-104) scale(.78)"/>
+    </g>
+    <circle class="pot" cx="130" cy="140" r="46"/>
+    <circle class="pot-lip" cx="130" cy="140" r="41"/>
+    <circle class="soil" cx="130" cy="140" r="36"/>
+    <g class="leaf-front">
+      <use href="#leaf" transform="translate(130 140) rotate(-38) scale(1)"/>
+      <use class="deep" href="#leaf" transform="translate(130 140) rotate(24) scale(.94)"/>
+      <use href="#leaf" transform="translate(130 140) rotate(84) scale(.82)"/>
+      <use class="deep" href="#leaf" transform="translate(130 140) rotate(-76) scale(.7)"/>
+    </g>
+  </svg>
+</div>
+
+<div id="plant-b" class="plant" aria-hidden="true">
+  <svg viewBox="0 0 180 180">
+    <ellipse class="plant-shadow" cx="98" cy="104" rx="50" ry="43"/>
+    <g class="leaf-back">
+      <use href="#leaf" transform="translate(90 96) rotate(168) scale(.56)"/>
+      <use href="#leaf" transform="translate(90 96) rotate(-134) scale(.5)"/>
+    </g>
+    <circle class="pot" cx="90" cy="96" r="30"/>
+    <circle class="pot-lip" cx="90" cy="96" r="26.5"/>
+    <circle class="soil" cx="90" cy="96" r="23"/>
+    <g class="leaf-front">
+      <use href="#leaf" transform="translate(90 96) rotate(-28) scale(.62)"/>
+      <use class="deep" href="#leaf" transform="translate(90 96) rotate(40) scale(.54)"/>
+      <use href="#leaf" transform="translate(90 96) rotate(-88) scale(.46)"/>
+    </g>
+  </svg>
+</div>
+
+<span id="connection" role="status" aria-live="polite" class="sr-only">Connected</span>
 
 <script src="/desk.js"></script>
 </body>

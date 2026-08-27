@@ -54,7 +54,7 @@ agent iterates.
 6. As a scientist, I want self-contained HTML plots (plotly, bokeh, altair) to render and stay interactive, so that anything I can't view natively still has a path onto the desk.
 7. As a scientist, I want markdown files to render as sheets, so that a written summary can sit next to the figure it describes.
 8. As a scientist, I want a single desk shared across all my work, so that there is one URL and one place to look.
-9. As a scientist, I want the desk to be an infinite pannable, zoomable canvas, so that I never run out of room.
+9. As a scientist, I want the desk to be a bounded pannable, zoomable slab with visible edges, so that it reads as a real desk seen from above and its edges give me a landmark to navigate by.
 10. As a scientist, I want a key that snaps the view back home, so that I can always recover my bearings after panning away.
 11. As a scientist, I want a zoomed-out overview, so that I can find something I placed a while ago.
 12. As a scientist, I want to drag a sheet to any position on the desk, so that the layout reflects how I think about the figures.
@@ -151,6 +151,45 @@ authority ends at the inbox.
 sheets stay smooth where inline SVG would mean 100k DOM nodes for a single dense
 scatter. Self-contained HTML in a sandboxed iframe as the escape hatch. Markdown
 rendered server-side.
+
+**The desk is bounded.** 4800 × 3200 desk units on a featureless floor.
+Ticket 07 built an infinite canvas and story 9 originally asked for one, on the
+reasoning that the user should never run out of room. That was reversed once
+the desk became literal: a surface seen from directly above has edges, and the
+coffee has to stand on something. Panning stops with at most 160px of floor
+showing, with no rubber-band — a bounce would imply the desk moved on its own,
+and the grammar of this app is that nothing moves unless the user moves it.
+Sheets clamp to the slab; paper does not hang off a desk. The accepted cost is
+that a full desk must be curated rather than escaped from.
+
+**Two skins, one structure.** The desk comes in `day` — an oak table in a
+coffee shop, on a warm terrazzo floor, under flat window light — and `night` —
+dark walnut under a single warm lamp that is a real object at a fixed spot on
+the desk, so panning moves the pool with the wood. `desk.css` owns structure
+and holds no colour of its own; `skins.css` holds nothing but colour, light,
+and which props are on. Switching skins therefore cannot move a sheet or change
+a gesture. The choice lives in `localStorage` and the server never learns about
+it. A third skin was designed and cut for not being good enough.
+
+**One material rule governs every skin: nothing paints over a figure.** Warm
+light lives inside `#desktop`, which is behind every sheet, and every material
+cue on a sheet lands on its 3px paper margin. A sheet in an unlit corner is not
+dimmed — only its surround is. That is physically wrong and deliberate: the
+figures are the point.
+
+**The coffee is a photograph.** Drawn gradients could not make a convincing
+crema or latte art at the size the cup is displayed, so the coffee is a
+public-domain photograph masked to the cup's rim circle, and CSS draws the
+ceramic rim and handle around it. It is the only binary asset in the repo and
+`web/ASSETS.md` records its source, licence, and processing. Each skin grades
+the same cup into its own light, which is also how the cup goes cold.
+
+**Connection state is the coffee, not a banner.** A mug at the near-right
+corner steams while the SSE stream is live; when it drops the steam wafts away
+over a second — a one-second blip must not flash at the user — and the coffee
+goes cold and still. This is a quieter alarm than the red banner it replaces,
+so an outage lasting 20s escalates the cup, and the same fact is carried in
+words on an `aria-live` region throughout.
 
 **Live updates over SSE**, not WebSocket — one-way is all that is needed and the
 browser reconnects on its own. A sheet update swaps the image silently and

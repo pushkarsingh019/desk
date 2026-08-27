@@ -15,7 +15,23 @@
 'use strict';
 
 const HOME = { x: 216, y: 24, scale: 1 };
-const MIN_SCALE = 0.05;
+
+/* The desk is a real, bounded slab. Sheets cannot be pushed off it and the
+   view cannot wander away from it: the edge is the landmark that a featureless
+   infinite plane never gave us, and a desk you can lose is not a desk. */
+const DESK = { w: 4800, h: 3200 };
+/** How much floor may show past an edge before panning stops. */
+const FLOOR_MARGIN = 160;
+/** Paper does not hang off a real desk. */
+const EDGE_INSET = 12;
+/** The inbox tray covers this much of the window's left edge. */
+const INBOX_W = 176;
+/** Above this the grain is only magnified into mush, so it fades out. */
+const GRAIN_FADE_SCALE = 2;
+/** How long a dropped stream runs cold before the cup starts to alarm. */
+const STALE_MS = 20000;
+
+const MIN_SCALE = 0.1;
 const MAX_SCALE = 8;
 const RING_MS = 600;
 const CLICK_SLOP = 4;
@@ -33,6 +49,10 @@ const FRAME_KINDS = new Set(['html', 'md', 'pdf']);
 const $ = (id) => document.getElementById(id);
 const viewportEl = $('viewport');
 const surface = $('surface');
+const desktop = $('desktop');
+const grain = $('grain');
+const mug = $('mug');
+const skinBtn = $('btn-skin');
 const inboxItems = $('inbox-items');
 const inboxEmpty = $('inbox-empty');
 const inboxCount = $('inbox-count');
@@ -108,9 +128,143 @@ async function refresh() {
   state = fresh;
   indexSheets();
   const stored = state.layout.viewport;
-  if (stored && !viewTouched) view = { x: stored.x, y: stored.y, scale: stored.scale };
+  if (stored && !viewTouched) view = clampView({ x: stored.x, y: stored.y, scale: stored.scale });
   applyView();
   render();
+}
+
+// --- the slab -------------------------------------------------------------
+
+desktop.style.width = DESK.w + 'px';
+desktop.style.height = DESK.h + 'px';
+
+/* Fibre, drawn once into a data URL. Each band is a stripe running along the
+   grain whose phase is warped by a slow function of x; integer frequencies in
+   both axes mean the plate tiles seamlessly. A photographed walnut texture
+   would look better and would also be the first binary asset in a repo whose
+   whole premise is static, buildless serving. This costs about 10ms.
+
+   The plate carries alpha only and is used as a MASK, not as an image, so one
+   plate serves oak and walnut alike: the skin supplies the colour. */
+function grainPlate(size) {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const image = ctx.createImageData(size, size);
+  const px = image.data;
+  const bands = [
+    { along: 9, across: 1, warp: 2.2, a: 0.42 },
+    { along: 19, across: 2, warp: 1.6, a: 0.28 },
+    { along: 43, across: 1, warp: 1.1, a: 0.18 },
+    { along: 83, across: 3, warp: 0.7, a: 0.10 },
+  ];
+  const TAU = Math.PI * 2;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      let v = 0;
+      for (const b of bands) {
+        v += b.a * Math.sin(TAU * b.along * y / size + b.warp * Math.sin(TAU * b.across * x / size));
+      }
+      let t = Math.min(1, Math.max(0, v * 0.5 + 0.5));
+      t = Math.pow(t, 1.6) + (Math.random() - 0.5) * 0.06;
+      const i = (y * size + x) * 4;
+      px[i] = 0;
+      px[i + 1] = 0;
+      px[i + 2] = 0;
+      px[i + 3] = Math.min(255, Math.max(0, t * 70));
+    }
+  }
+  ctx.putImageData(image, 0, 0);
+  return canvas.toDataURL('image/png');
+}
+
+document.documentElement.style.setProperty('--grain-plate', 'url(' + grainPlate(512) + ')');
+
+// --- which desk you are sitting at ---------------------------------------
+
+/* Two materials over one structure. A skin sets colours and which props are
+   on; it can never move a sheet or change a gesture, because `desk.css` owns
+   the geometry and holds no colour of its own. */
+const SKINS = ['day', 'night'];
+
+function applySkin(name) {
+  const skin = SKINS.includes(name) ? name : 'day';
+  document.documentElement.dataset.skin = skin;
+  skinBtn.textContent = skin;
+  try {
+    localStorage.setItem('desk.skin', skin);
+  } catch (err) {
+    // A private window refuses storage. The skin still applies for this tab.
+  }
+}
+
+function cycleSkin() {
+  applySkin(SKINS[(SKINS.indexOf(document.documentElement.dataset.skin) + 1) % SKINS.length]);
+}
+
+// The head script already picked one before first paint; adopt its choice so
+// the button's label and the document agree.
+applySkin(document.documentElement.dataset.skin);
+skinBtn.addEventListener('click', cycleSkin);
+
+/** The region the view may explore: the slab, plus anything a previous,
+ *  unbounded desk left outside it. Legacy sheets stay reachable, and — this is
+ *  the point — are never moved by anything except the user's own hand. */
+function clampRegion() {
+  const box = state.geometry && state.geometry.bounds;
+  let left = 0;
+  let top = 0;
+  let right = DESK.w;
+  let bottom = DESK.h;
+  if (box && box.w > 0 && box.h > 0) {
+    left = Math.min(left, box.x);
+    top = Math.min(top, box.y);
+    right = Math.max(right, box.x + box.w);
+    bottom = Math.max(bottom, box.y + box.h);
+  }
+  return { x: left, y: top, w: right - left, h: bottom - top };
+}
+
+/** Where one edge of the desk is allowed to sit, in screen pixels. */
+function clampAxis(edge, span, lo, hi) {
+  const min = hi - FLOOR_MARGIN - span;
+  const max = lo + FLOOR_MARGIN;
+  if (min > max) return lo + (hi - lo - span) / 2; // desk smaller than the window
+  return Math.min(max, Math.max(min, edge));
+}
+
+/** Keep the desk on screen. No rubber-band: a bounce implies the desk moved on
+ *  its own, and nothing here moves unless the user moves it. Panning simply
+ *  stops, and the band of floor you are looking at says which edge you hit. */
+function clampView(next) {
+  const r = clampRegion();
+  const scale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, next.scale));
+  const left = clampAxis(next.x + r.x * scale, r.w * scale, INBOX_W, window.innerWidth);
+  const top = clampAxis(next.y + r.y * scale, r.h * scale, 0, window.innerHeight);
+  return { x: left - r.x * scale, y: top - r.y * scale, scale };
+}
+
+/** Paper does not hang off a real desk. A sheet left outside the slab by a
+ *  previous, unbounded desk is pulled in only when the user drags it. */
+function clampSheet(x, y, w, h) {
+  const maxX = Math.max(EDGE_INSET, DESK.w - EDGE_INSET - w);
+  const maxY = Math.max(EDGE_INSET, DESK.h - EDGE_INSET - h);
+  return {
+    x: Math.min(maxX, Math.max(EDGE_INSET, x)),
+    y: Math.min(maxY, Math.max(EDGE_INSET, y)),
+  };
+}
+
+/** Light the edge a dragged sheet has come up against. */
+function markEdge(at, rawX, rawY) {
+  desktop.classList.toggle('edge-w', at.x > rawX);
+  desktop.classList.toggle('edge-e', at.x < rawX);
+  desktop.classList.toggle('edge-n', at.y > rawY);
+  desktop.classList.toggle('edge-s', at.y < rawY);
+}
+
+function clearEdges() {
+  desktop.classList.remove('edge-w', 'edge-e', 'edge-n', 'edge-s');
 }
 
 // --- the desk transform ---------------------------------------------------
@@ -122,14 +276,14 @@ function applyView() {
   surface.style.transform =
     'translate(' + view.x + 'px, ' + view.y + 'px) scale(' + view.scale + ')';
   zoomReadout.textContent = Math.round(view.scale * 100) + '%';
+  // Leaning in past 2x, the wood is only being magnified into mush, and the
+  // figure is what you came for. Cross-fading it out caps the cost of the
+  // grain plate at exactly the zoom levels where it would be paid.
+  document.body.classList.toggle('zoomed-in', view.scale > GRAIN_FADE_SCALE);
 }
 
 function setView(next, { persist = true } = {}) {
-  view = {
-    x: next.x,
-    y: next.y,
-    scale: Math.min(MAX_SCALE, Math.max(MIN_SCALE, next.scale)),
-  };
+  view = clampView(next);
   viewTouched = true;
   applyView();
   if (persist) {
@@ -160,8 +314,8 @@ function goHome() {
 
 /** Fit everything on the desk into the window — the zoomed-out overview. */
 function goOverview() {
-  const box = state.geometry.bounds;
-  if (!box || box.w <= 0 || box.h <= 0) return goHome();
+  const box = state.geometry.bounds || { x: 0, y: 0, w: DESK.w, h: DESK.h };
+  if (box.w <= 0 || box.h <= 0) return goHome();
   const pad = 60;
   const left = 176; // the inbox strip covers this much of the window
   const availW = window.innerWidth - left - pad * 2;
@@ -637,9 +791,14 @@ function beginResize(e, sheetEl) {
   document.body.classList.add('dragging');
   const sizeAt = (ev) => {
     const floor = state.geometry.min_size;
+    // Growing a sheet stops at the edge of the desk, the same way sliding one
+    // does. A sheet a previous, unbounded desk left off the slab has no room
+    // to measure against, so it keeps the old, unbounded behaviour.
+    const roomW = placement.x < DESK.w ? Math.max(floor, DESK.w - EDGE_INSET - placement.x) : Infinity;
+    const roomH = placement.y < DESK.h ? Math.max(floor, DESK.h - EDGE_INSET - placement.y) : Infinity;
     return {
-      w: Math.max(floor, start.w + (ev.clientX - start.x) / view.scale),
-      h: Math.max(floor, start.h + (ev.clientY - start.y) / view.scale),
+      w: Math.min(roomW, Math.max(floor, start.w + (ev.clientX - start.x) / view.scale)),
+      h: Math.min(roomH, Math.max(floor, start.h + (ev.clientY - start.y) / view.scale)),
     };
   };
 
@@ -669,6 +828,14 @@ function beginMove(e, el, type) {
         ? currentFannedPosition(id)
         : { x: state.layout.sheets[id].x, y: state.layout.sheets[id].y };
   const start = { x: e.clientX, y: e.clientY };
+  const size = type === 'pile' ? pileSize(state.layout.piles[pileId]) : state.layout.sheets[id];
+  const at = (ev) => {
+    const rawX = origin.x + (ev.clientX - start.x) / view.scale;
+    const rawY = origin.y + (ev.clientY - start.y) / view.scale;
+    const spot = clampSheet(rawX, rawY, size.w, size.h);
+    spot.raw = { x: rawX, y: rawY };
+    return spot;
+  };
   let moved = false;
 
   if (type === 'sheet') layoutOp('raise', { sheet_id: id });
@@ -679,10 +846,10 @@ function beginMove(e, el, type) {
 
   captureDrag(e, {
     move(ev) {
-      const dx = (ev.clientX - start.x) / view.scale;
-      const dy = (ev.clientY - start.y) / view.scale;
       if (Math.abs(ev.clientX - start.x) > CLICK_SLOP || Math.abs(ev.clientY - start.y) > CLICK_SLOP) moved = true;
-      el.style.transform = 'translate(' + (origin.x + dx) + 'px, ' + (origin.y + dy) + 'px)';
+      const spot = at(ev);
+      markEdge(spot, spot.raw.x, spot.raw.y);
+      el.style.transform = 'translate(' + spot.x + 'px, ' + spot.y + 'px)';
       highlightDropTarget(ev, el, type);
     },
     up(ev) {
@@ -698,6 +865,7 @@ function beginMove(e, el, type) {
       document.body.classList.remove('dragging');
       el.style.pointerEvents = '';
       clearDropHighlight();
+      clearEdges();
       trashDrop.classList.remove('armed');
 
       if (!moved) {
@@ -720,10 +888,9 @@ function beginMove(e, el, type) {
         trashSheet(id);
         return;
       }
-      const dx = (ev.clientX - start.x) / view.scale;
-      const dy = (ev.clientY - start.y) / view.scale;
-      const x = Math.round(origin.x + dx);
-      const y = Math.round(origin.y + dy);
+      const spot = at(ev);
+      const x = Math.round(spot.x);
+      const y = Math.round(spot.y);
 
       if (type === 'pile') return layoutOp('move_pile', { pile_id: pileId, x, y });
 
@@ -854,10 +1021,16 @@ inboxItems.addEventListener('pointerdown', (e) => {
       const inboxRect = $('inbox').getBoundingClientRect();
       if (ev.clientX < inboxRect.right) return; // dropped back into the strip
       const at = toDesk(ev.clientX, ev.clientY);
+      const spot = clampSheet(
+        at.x - grab.fx * placement.w,
+        at.y - grab.fy * placement.h,
+        placement.w,
+        placement.h,
+      );
       layoutOp('place', {
         sheet_id: id,
-        x: Math.round(at.x - grab.fx * placement.w),
-        y: Math.round(at.y - grab.fy * placement.h),
+        x: Math.round(spot.x),
+        y: Math.round(spot.y),
       });
     },
   });
@@ -1041,6 +1214,7 @@ window.addEventListener('keydown', (e) => {
     if (anyPileOpen()) return layoutOp('close_piles', {});
   }
   if (!fullscreenEl.hidden) return;
+  if (e.key === 't') cycleSkin();
   if (e.key === '0') goHome();
   if (e.key === 'f') goOverview();
   if (e.key === '=' || e.key === '+') zoomAt(window.innerWidth / 2, window.innerHeight / 2, 1.2);
@@ -1094,7 +1268,7 @@ function listen() {
   });
 
   source.addEventListener('open', () => {
-    connection.hidden = true;
+    setLink(true);
     reopenDelay = RECONNECT_MIN_MS;
     // Whatever happened while the stream was down, this catches the desk up.
     refresh().catch(() => {});
@@ -1104,9 +1278,33 @@ function listen() {
   // that goes away mid-response leaves it CLOSED for good — a restarted desk
   // would then be silently stale in an open tab. So the page reopens it itself.
   source.addEventListener('error', () => {
-    connection.hidden = false;
+    setLink(false);
     if (source.readyState === EventSource.CLOSED) reopen(source);
   });
+}
+
+// --- the coffee: connection state, as an object rather than a banner ------
+
+let staleTimer = null;
+
+/** The stream's state, told in coffee. Steam while it is live; when it drops
+ *  the steam wafts away over a second rather than snapping off, because a
+ *  one-second blip must not flash at the user, and the cup goes cold — cold
+ *  means still, which is the whole of the metaphor. A cup is a quieter alarm
+ *  than a red banner was, so an outage that lasts escalates. The same fact
+ *  goes out in words on the live region, for anything that cannot see steam. */
+function setLink(live) {
+  document.body.classList.toggle('offline', !live);
+  clearTimeout(staleTimer);
+  if (live) {
+    document.body.classList.remove('stale');
+    mug.title = 'Connected';
+    connection.textContent = 'Connected';
+    return;
+  }
+  mug.title = 'Reconnecting…';
+  connection.textContent = 'Connection lost — reconnecting';
+  staleTimer = setTimeout(() => document.body.classList.add('stale'), STALE_MS);
 }
 
 function reopen(source) {
@@ -1118,6 +1316,10 @@ function reopen(source) {
     listen();
   }, wait);
 }
+
+// A window that shrank can leave the desk clamped against a bound that has
+// moved. Re-clamping is not persisted: the desk did not change, the window did.
+window.addEventListener('resize', () => setView(view, { persist: false }));
 
 // A laptop that slept through the outage should not have to be reloaded.
 document.addEventListener('visibilitychange', () => {
@@ -1143,7 +1345,7 @@ refresh()
     viewTouched = false;
     const stored = state.layout.viewport;
     if (stored) {
-      view = { x: stored.x, y: stored.y, scale: stored.scale };
+      view = clampView({ x: stored.x, y: stored.y, scale: stored.scale });
       applyView();
     }
   })
