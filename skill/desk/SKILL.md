@@ -1,12 +1,12 @@
 ---
 name: desk
-description: Put a figure on the desk — the page on your tailnet where you look at figures.
+description: Put a figure on the desk — the page where you look at figures.
 disable-model-invocation: true
 argument-hint: "[path/to/figure.svg]"
 allowed-tools: Bash(desk:*)
 ---
 
-# /desk
+# Desk
 
 Present a figure, then report the URL the command prints.
 
@@ -41,8 +41,12 @@ how big it is, and what it sits next to are the user's to decide.
   that instead.
 - `found no figure to present` — nothing recent is lying around. Ask for a path.
 - `no such file` — the path is wrong. Say so and let the user correct it.
-- `could not reach the desk` — quote it. The log is `~/Library/Logs/desk/desk.log`.
+- `could not reach the desk` — quote it. `desk status` prints the log path.
 
-The desk server runs on the machine you are running on. Working anywhere other
-than `pushkar-studio` means a sheet publishes once and then silently stops
-updating, so say where you are rather than letting a stale figure look fresh.
+## The desk is on the machine you are running on
+
+Watching is a filesystem operation, so the desk can only see files on its own
+machine. If you are working on a different machine from the one the desk was
+installed on — over SSH, in a container, on a remote sandbox — a figure you
+present there is not on the user's desk. Say where you are rather than letting
+a stale figure look fresh.

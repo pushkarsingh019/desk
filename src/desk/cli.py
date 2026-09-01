@@ -85,18 +85,44 @@ def find_latest_figure(root: Path) -> Path | None:
     return newest[1] if newest else None
 
 
+def default_log_dir() -> Path:
+    """Where the desk writes its log, by the convention of the platform.
+
+    Each platform has one place a user already knows to look, and the install
+    script asks this function rather than guessing, so the log the desk writes
+    and the log the installer prints are the same file on every OS.
+    """
+    override = os.environ.get("DESK_LOG_DIR")
+    if override:
+        return Path(override).expanduser()
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Logs" / "desk"
+    if os.name == "nt":
+        base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+        return Path(base) / "desk" / "logs"
+    return Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state") / "desk"
+
+
 def start_server(host: str, port: int, timeout: float = 45.0) -> None:
     """Bring the desk up in the background and wait for its port."""
-    log_dir = Path(os.environ.get("DESK_LOG_DIR") or Path.home() / "Library" / "Logs" / "desk")
+    log_dir = default_log_dir()
     log_dir.mkdir(parents=True, exist_ok=True)
     log = open(log_dir / "desk.log", "ab")
+    # Detach, so the desk outlives the shell that presented the first figure.
+    # The two platforms spell that differently and each rejects the other's
+    # spelling outright.
+    detach = (
+        {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS}
+        if os.name == "nt"
+        else {"start_new_session": True}
+    )
     subprocess.Popen(
         [sys.executable, "-m", "desk.server"],
         stdout=log,
         stderr=log,
         stdin=subprocess.DEVNULL,
-        start_new_session=True,
         cwd=str(Path.home()),
+        **detach,
     )
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -181,6 +207,7 @@ def cmd_status(args) -> int:
     print(f"{len(state['sheets'])} sheets — {placed} on the desk, {inbox} in the inbox, "
           f"{len(state['trash'])} in the trash")
     print(f"data: {state.get('data_dir', '?')}")
+    print(f"log:  {default_log_dir() / 'desk.log'}")
     return 0
 
 

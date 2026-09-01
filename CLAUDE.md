@@ -19,22 +19,37 @@ blocking edges.
 
 ## Where this runs
 
-`pushkar-studio` — macOS 27, arm64, system `python3` 3.9.6, no node. The server
-must run on the same machine as the agent, because watching is a filesystem
-operation. The user browses the desk from a different machine over Tailscale.
+Anyone's machine. The maintainer's is `pushkar-studio` — macOS 27, arm64,
+system `python3` 3.9.6, no node — and that is a test case, not an assumption.
+
+**Keep the platform in `scripts/`.** OS-specific code lives in the install
+scripts and in three named helpers: `default_log_dir` in `cli.py`, and
+`tailscale_address` / `_interface_addresses` in `server.py`. Everything else is
+plain Python that runs anywhere Python does, and stays that way. `SETUP.md` is
+the install written for someone else's agent — change it whenever you change
+`install.sh`.
+
+The server must run on the same machine as the agent, because watching is a
+filesystem operation. The user may browse the desk from anywhere.
 
 ## Stack
 
 - Python, pinned and run via `uv`, so the server never touches the system Python
-  on a machine used for science. `uv` lives at `~/.local/bin/uv` on studio, which
-  is **not** on the PATH of non-interactive shells or launchd — use absolute
-  paths anywhere the environment is not a login shell.
+  on a machine used for science. `uv` is usually at `~/.local/bin/uv`, which is
+  **not** on the PATH of non-interactive shells or a service manager — use
+  absolute paths anywhere the environment is not a login shell.
 - Frontend is vanilla JS and CSS with **no build step**. Served static.
-- A launchd user agent keeps the server alive across reboots.
-- Plain HTTP bound to the Tailscale interface. No TLS, no tokens. Tailscale is
-  the authentication boundary — this is a deliberate decision, not an oversight.
+- A launchd user agent (macOS) or systemd user unit (Linux) keeps the server
+  alive across reboots.
+- Plain HTTP bound to exactly one address — the tailnet if there is one, else
+  `127.0.0.1`. No TLS, no tokens: the bind address is the whole perimeter. That
+  is a deliberate decision, not an oversight.
 
 ## Testing
+
+```
+uv run pytest
+```
 
 Two seams, both as high as possible. Test external behaviour only; never reach
 into internal state.
@@ -48,7 +63,7 @@ pile, unpile, trash, restore, inbox membership, z-order) are pure functions over
 a plain state object, tested directly.
 
 The DOM layer stays thin enough to need no tests. Pixel rendering, drag physics,
-pan/zoom feel, and launchd integration are verified by looking at the thing —
+pan/zoom feel, and service integration are verified by looking at the thing —
 this is a deliberate trade to avoid a browser-automation dependency.
 
 If you find yourself wanting a third seam, that is a signal the module shape is

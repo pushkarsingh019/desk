@@ -89,6 +89,12 @@ agent iterates.
 
 ## Implementation Decisions
 
+*This section describes the deployment it was written for — one machine,
+`pushkar-studio`, on a tailnet. The hostnames are that deployment, not a
+requirement: what shipped installs on macOS or Linux, with or without
+Tailscale. See `README.md` and `SETUP.md`. The decisions below stand as
+recorded.*
+
 **Deployment shape.** Single machine. The server, the file store, the watched
 source files, and the coding agent all live on `pushkar-studio`. Development
 happens there too — building anywhere else would require a deploy step this
@@ -105,7 +111,7 @@ reboots. Studio already runs several launchd agents, so a port that does not
 collide with them must be chosen; `7777` is the default subject to that check.
 
 **Network.** Plain HTTP bound to the Tailscale interface, browsed at
-`http://pushkar-studio.taila96c04.ts.net:7777`. No TLS, no tokens. Tailscale is
+`http://<machine>.<tailnet>.ts.net:7777`. No TLS, no tokens. Tailscale is
 the authentication boundary. HTTPS via `tailscale serve` was considered and
 dropped: it existed only for iPad Safari, mobile is out of scope, and the
 `tailscale` CLI is not on studio's non-interactive PATH.

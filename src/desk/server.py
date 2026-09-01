@@ -12,6 +12,7 @@ import math
 import os
 import queue
 import re
+import shutil
 import socketserver
 import subprocess
 import sys
@@ -581,7 +582,48 @@ class DeskServer(ThreadingHTTPServer):
 # --- binding --------------------------------------------------------------
 
 
-TAILSCALE_CLI = "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+#: Where the Tailscale CLI lives when it is not on PATH. Under launchd PATH is
+#: minimal and the macOS app bundle is the only copy on the machine, so the
+#: list is not redundant with `which`.
+TAILSCALE_CLIS = (
+    "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+    "/usr/bin/tailscale",
+    "/usr/local/bin/tailscale",
+    "/opt/homebrew/bin/tailscale",
+    r"C:\Program Files\Tailscale\tailscale.exe",
+)
+
+#: The address the desk falls back to when there is no tailnet. Not `0.0.0.0`:
+#: the desk has no TLS and no login, so the address it binds is its only
+#: perimeter, and localhost is a perimeter even on a cafe network.
+LOCAL_BIND = "127.0.0.1"
+
+
+def tailscale_cli() -> str | None:
+    """The Tailscale command, or None if this machine has no Tailscale."""
+    override = os.environ.get("DESK_TAILSCALE_CLI")
+    if override:
+        return override if os.path.exists(override) else None
+    found = shutil.which("tailscale")
+    if found:
+        return found
+    for candidate in TAILSCALE_CLIS:
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def _tailscale_status() -> dict | None:
+    cli = tailscale_cli()
+    if not cli:
+        return None
+    try:
+        out = subprocess.run(
+            [cli, "status", "--json"], capture_output=True, text=True, timeout=5
+        )
+        return json.loads(out.stdout)
+    except Exception:
+        return None
 
 
 def tailscale_name(fallback: str) -> str:
@@ -591,55 +633,84 @@ def tailscale_name(fallback: str) -> str:
     returns an `ip6.arpa` string here and can block for minutes under launchd,
     hanging the desk before it ever binds.
     """
+    status = _tailscale_status()
     try:
-        out = subprocess.run(
-            [TAILSCALE_CLI, "status", "--json"], capture_output=True, text=True, timeout=5
-        )
-        name = json.loads(out.stdout)["Self"]["DNSName"].rstrip(".")
-        if name:
-            return name
-    except Exception:
-        pass
-    return fallback
+        name = status["Self"]["DNSName"].rstrip(".")
+    except (TypeError, KeyError, AttributeError):
+        name = ""
+    return name or fallback
+
+
+def _interface_addresses() -> list[str]:
+    """Every IPv4 address the platform will name, however it names them.
+
+    Asked only when the Tailscale CLI is unreachable, which is the normal case
+    under launchd. Each command is tried in turn and the first that runs wins;
+    a machine has either `ifconfig` or `ip`, never a reason to run both.
+    """
+    for command in (["/sbin/ifconfig"], ["ifconfig"], ["ip", "-4", "-o", "addr"]):
+        try:
+            out = subprocess.run(
+                command, capture_output=True, text=True, timeout=5
+            ).stdout
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if out:
+            return re.findall(r"\b\d{1,3}(?:\.\d{1,3}){3}\b", out)
+    return []
 
 
 def tailscale_address() -> str | None:
-    """The machine's address on the tailnet, or None if it isn't up.
-
-    Binding here — and only here — is what keeps the desk off every other
-    network. Tailscale is the authentication boundary.
-    """
-    try:
-        out = subprocess.run(
-            ["/sbin/ifconfig"], capture_output=True, text=True, timeout=5
-        ).stdout
-    except (OSError, subprocess.SubprocessError):
-        return None
-    for line in out.splitlines():
-        line = line.strip()
-        if not line.startswith("inet "):
-            continue
-        addr = line.split()[1]
+    """The machine's address on the tailnet, or None if it isn't up."""
+    status = _tailscale_status()
+    if status:
+        for addr in (status.get("Self") or {}).get("TailscaleIPs") or []:
+            if _TAILSCALE_RANGE.match(addr):
+                return addr
+    for addr in _interface_addresses():
         if _TAILSCALE_RANGE.match(addr):
             return addr
     return None
 
 
-class NoTailnet(RuntimeError):
-    """Tailscale is not up, so there is no address the desk may bind to."""
+class BindError(RuntimeError):
+    """There is no address the desk may bind to, so it will not start."""
 
 
-def resolve_host(wait: float = 0.0) -> tuple[str, str]:
+class NoTailnet(BindError):
+    """Tailscale is not up, and the desk was told to bind there and nowhere else."""
+
+
+def resolve_host(wait: float | None = None) -> tuple[str, str]:
     """Return (bind address, the hostname to print in the desk URL).
 
-    At login the desk may well start before Tailscale does, so this waits for
-    the tailnet rather than quietly binding somewhere else. Binding to the
-    tailnet address and nothing else is what keeps the desk off every other
-    network — there is no other perimeter.
+    The address the desk binds is its only perimeter — there is no TLS and no
+    login — so this never widens on its own. It answers in one of three ways:
+
+    * `DESK_HOST` — bind exactly there. The escape hatch, and it wins.
+    * `DESK_BIND=tailnet` — the tailnet address and nothing else, waiting for
+      Tailscale to come up. `install.sh` writes this when it finds a tailnet,
+      so a desk browsed from another machine never quietly retreats to
+      localhost after a reboot and leaves its URL dead.
+    * `DESK_BIND=local` — `127.0.0.1`, for a desk browsed on the machine that
+      serves it.
+    * Nothing set — the tailnet if it is already there, otherwise localhost.
     """
     override = os.environ.get("DESK_HOST")
     if override:
         return override, os.environ.get("DESK_HOSTNAME", override)
+
+    mode = (os.environ.get("DESK_BIND") or "auto").strip().lower()
+    if mode not in ("auto", "tailnet", "local"):
+        raise BindError(f"DESK_BIND must be auto, tailnet or local; got {mode!r}")
+    if mode == "local":
+        return LOCAL_BIND, os.environ.get("DESK_HOSTNAME") or "localhost"
+
+    # Only `tailnet` waits. At login the desk may well start before Tailscale
+    # does, and a desk that is meant to be reachable from another machine
+    # should stall rather than come up at the wrong address.
+    if wait is None:
+        wait = float(os.environ.get("DESK_TAILNET_WAIT") or (45 if mode == "tailnet" else 0))
     deadline = time.monotonic() + wait
     while True:
         tailnet = tailscale_address()
@@ -649,12 +720,16 @@ def resolve_host(wait: float = 0.0) -> tuple[str, str]:
             # not reachable, which is the whole reason that value exists.
             return tailnet, tailscale_name(os.environ.get("DESK_HOSTNAME") or tailnet)
         if time.monotonic() >= deadline:
-            raise NoTailnet(
-                "no tailscale address found. The desk binds to the tailnet and "
-                "nothing else, so it will not start without one. Bring Tailscale "
-                "up, or set DESK_HOST explicitly to bind somewhere else."
-            )
+            break
         time.sleep(2)
+
+    if mode == "tailnet":
+        raise NoTailnet(
+            "no tailscale address found. This desk was installed to bind to the "
+            "tailnet and nothing else, so it will not start without one. Bring "
+            "Tailscale up, or set DESK_BIND=local to serve this machine only."
+        )
+    return LOCAL_BIND, os.environ.get("DESK_HOSTNAME") or "localhost"
 
 
 def build() -> tuple[DeskServer, str]:
@@ -662,7 +737,7 @@ def build() -> tuple[DeskServer, str]:
     port = int(os.environ.get("DESK_PORT") or DEFAULT_PORT)
     debounce = float(os.environ.get("DESK_DEBOUNCE") or DEFAULT_DEBOUNCE)
     poll = float(os.environ.get("DESK_POLL_INTERVAL") or DEFAULT_POLL_INTERVAL)
-    bind, hostname = resolve_host(wait=float(os.environ.get("DESK_TAILNET_WAIT") or 45))
+    bind, hostname = resolve_host()
     desk = Desk(data_dir, debounce=debounce, poll_interval=poll)
     url = f"http://{hostname}:{port}"
     return DeskServer((bind, port), desk, url), url
@@ -671,7 +746,7 @@ def build() -> tuple[DeskServer, str]:
 def main() -> int:
     try:
         server, url = build()
-    except NoTailnet as exc:
+    except BindError as exc:
         # Exit nonzero rather than bind somewhere the user did not ask for.
         # Under launchd this means "try again in a moment", which is exactly
         # what is wanted when the desk starts before Tailscale does.

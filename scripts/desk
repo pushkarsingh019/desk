@@ -1,14 +1,29 @@
 #!/bin/sh
 # The `desk` command.
 #
-# `uv` is not on the PATH of non-interactive shells or launchd on studio, and
-# `uv run --directory` moves the process into the desk's own repo — so this
-# wrapper pins the absolute uv path and carries the caller's directory across
-# in DESK_CWD, which is what bare `/desk` resolves figures against.
+# `uv` is usually missing from the PATH of non-interactive shells and service
+# managers, and `uv run --directory` moves the process into the desk's own repo
+# — so this wrapper finds uv by absolute path and carries the caller's
+# directory across in DESK_CWD, which is what a bare `/desk` resolves figures
+# against.
 
 set -e
 
-UV="${DESK_UV:-$HOME/.local/bin/uv}"
+find_uv() {
+  if [ -n "$DESK_UV" ]; then
+    echo "$DESK_UV"
+    return
+  fi
+  for candidate in "$HOME/.local/bin/uv" /opt/homebrew/bin/uv /usr/local/bin/uv /usr/bin/uv; do
+    if [ -x "$candidate" ]; then
+      echo "$candidate"
+      return
+    fi
+  done
+  command -v uv 2>/dev/null || true
+}
+
+UV="$(find_uv)"
 # $0 may be a symlink, in which case its directory is not the project. The
 # generated launcher in ~/.local/bin passes DESK_PROJECT for exactly this.
 SELF="$0"
@@ -32,8 +47,8 @@ if [ -x "$PYTHON" ]; then
   exec "$PYTHON" -m desk.cli "$@"
 fi
 
-if [ ! -x "$UV" ]; then
-  echo "desk: no environment at $PYTHON and no uv at $UV." >&2
+if [ -z "$UV" ] || [ ! -x "$UV" ]; then
+  echo "desk: no environment at $PYTHON, and no uv to build one." >&2
   echo "desk: run scripts/install.sh, or set DESK_UV." >&2
   exit 1
 fi

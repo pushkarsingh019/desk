@@ -8,7 +8,7 @@ nothing to start by hand.
 
 **Status:** ready-for-agent
 
-- [x] The server binds to the Tailscale interface and is reachable from another tailnet device at `http://pushkar-studio.taila96c04.ts.net:<port>`
+- [x] The server binds to the Tailscale interface and is reachable from another tailnet device at `http://<machine>.<tailnet>.ts.net:<port>`
 - [x] The server is not reachable from outside the tailnet
 - [x] A launchd user agent starts the server at login and restarts it if it dies
 - [x] The chosen port does not collide with the launchd agents already on studio
