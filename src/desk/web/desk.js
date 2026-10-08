@@ -125,13 +125,62 @@ async function layoutOp(op, params) {
 
 async function refresh() {
   const fresh = await apiGet('/api/state');
+  // A different desk than the one on screen: take its own viewport, not the
+  // pan the user made on the last one.
+  if (state.desk && fresh.desk !== state.desk) viewTouched = false;
   state = fresh;
   indexSheets();
+  renderDesks();
   const stored = state.layout.viewport;
   if (stored && !viewTouched) view = clampView({ x: stored.x, y: stored.y, scale: stored.scale });
   applyView();
   render();
+  if (fullscreenId !== null && sheetsById.has(fullscreenId)) renderPins(sheetsById.get(fullscreenId));
 }
+
+// --- which desk -----------------------------------------------------------
+
+/* Several desks, one of them out. The switcher lists them; the current one is
+   the one every /desk lands on, so the page title says which it is. */
+const deskSwitch = $('desk-switch');
+
+function renderDesks() {
+  const names = state.desks || [state.desk || 'main'];
+  deskSwitch.textContent = '';
+  for (const name of names) {
+    const option = document.createElement('option');
+    option.value = name;
+    option.textContent = name;
+    deskSwitch.appendChild(option);
+  }
+  deskSwitch.value = state.desk;
+  document.title = state.desk && state.desk !== 'main' ? 'Desk \u2014 ' + state.desk : 'Desk';
+  $('btn-remove-desk').disabled = state.sheets.length > 0 || names.length < 2;
+}
+
+async function deskOp(op, name) {
+  try {
+    await apiPost('/api/desks', { op, name });
+  } catch (err) {
+    console.error('desks', op, err);
+    alert(err.message || String(err));
+  }
+  await refresh();
+}
+
+deskSwitch.addEventListener('change', () => deskOp('switch', deskSwitch.value));
+
+$('btn-new-desk').addEventListener('click', () => {
+  const name = prompt('Name the new desk');
+  if (name && name.trim()) deskOp('create', name.trim());
+});
+
+$('btn-remove-desk').addEventListener('click', () => {
+  if (state.sheets.length) return;
+  if (confirm('Take the desk \u201c' + state.desk + '\u201d away? Its trash goes with it.')) {
+    deskOp('remove', state.desk);
+  }
+});
 
 // --- the slab -------------------------------------------------------------
 
@@ -414,8 +463,15 @@ function buildSheet(sheet) {
   chrome.className = 'sheet-chrome';
   const name = document.createElement('span');
   name.className = 'sheet-name';
+  const origin = document.createElement('span');
+  origin.className = 'sheet-origin';
   const version = document.createElement('span');
   version.className = 'sheet-version';
+  // The open-comment count. On the margin, never over the figure: the
+  // fullscreen pins are the one accepted exception to that rule.
+  const comments = document.createElement('span');
+  comments.className = 'sheet-comments';
+  comments.hidden = true;
   const grow = document.createElement('button');
   grow.className = 'sheet-grow';
   grow.title = 'Enlarge (or double-click)';
@@ -437,7 +493,7 @@ function buildSheet(sheet) {
     const host = bin.closest('.sheet, .pile');
     if (host && host.dataset.sheetId) trashSheet(host.dataset.sheetId);
   });
-  chrome.append(name, version, grow, bin);
+  chrome.append(name, origin, version, comments, grow, bin);
 
   const body = document.createElement('div');
   body.className = 'sheet-body';
@@ -450,10 +506,20 @@ function buildSheet(sheet) {
   return el;
 }
 
+/* Where a sheet came from, spelled the way scp would: a sheet sent from
+   another machine is `origin:path`, a sheet published here is its path. */
+function whereFrom(sheet) {
+  return sheet.origin ? sheet.origin + ':' + sheet.source_path : sheet.source_path;
+}
+
 function updateSheetEl(el, sheet, placement, { z, x, y }) {
   el.querySelector('.sheet-name').textContent = sheet.name;
-  el.querySelector('.sheet-name').title = sheet.source_path;
+  el.querySelector('.sheet-name').title = whereFrom(sheet);
+  const origin = el.querySelector('.sheet-origin');
+  origin.textContent = sheet.origin ? 'from ' + sheet.origin : '';
+  origin.hidden = !sheet.origin;
   el.querySelector('.sheet-version').textContent = 'v' + sheet.version;
+  setCommentBadge(el, sheet);
   fillBody(el.querySelector('.sheet-body'), sheet);
   el.style.zIndex = z;
   el.classList.toggle('active', activeId === sheet.id && el.classList.contains('sheet'));
@@ -611,8 +677,14 @@ function renderInbox() {
     const label = document.createElement('span');
     label.className = 'label';
     label.textContent = sheet.name;
-    label.title = sheet.source_path;
+    label.title = whereFrom(sheet);
     item.append(preview, label);
+    if (sheet.origin) {
+      const from = document.createElement('span');
+      from.className = 'from';
+      from.textContent = 'from ' + sheet.origin;
+      item.appendChild(from);
+    }
     inboxItems.appendChild(item);
   }
 }
@@ -626,8 +698,8 @@ function renderTrash() {
     row.className = 'trash-item';
     const name = document.createElement('span');
     name.className = 'name';
-    name.textContent = sheet.name;
-    name.title = sheet.source_path;
+    name.textContent = sheet.origin ? sheet.name + ' \u2014 from ' + sheet.origin : sheet.name;
+    name.title = whereFrom(sheet);
     const restore = document.createElement('button');
     restore.textContent = 'restore';
     restore.addEventListener('click', () => restoreSheet(sheet.id));
@@ -664,7 +736,12 @@ function swapInPlace(sheet) {
   // would otherwise be silent. The ring is what says something in there changed.
   const pileId = pileOf(sheet.id);
   if (pileId) ring(nodes.get('pile:' + pileId));
-  if (fullscreenId === sheet.id) fillFullscreen(sheet, { keepView: true });
+  if (fullscreenId === sheet.id) {
+    fillFullscreen(sheet, { keepView: true });
+    // The pins are fractions, so they stay put; a pin made on the version
+    // that just went turns hollow.
+    renderPins(sheet);
+  }
 }
 
 const ringTimers = new WeakMap();
@@ -1071,6 +1148,18 @@ async function restoreSheet(id) {
   await refresh();
 }
 
+$('btn-clear').addEventListener('click', async () => {
+  if (!state.sheets.length) return;
+  const n = state.sheets.length;
+  if (!confirm(`Clear the desk? ${n} sheet${n === 1 ? '' : 's'} will go to the trash.`)) return;
+  try {
+    await apiPost('/api/clear', {});
+  } catch (err) {
+    console.error('clear', err);
+  }
+  await refresh();
+});
+
 $('btn-trash').addEventListener('click', () => {
   trashPanel.hidden = !trashPanel.hidden;
 });
@@ -1083,6 +1172,7 @@ $('btn-trash-close').addEventListener('click', () => {
 const fullscreenEl = $('fullscreen');
 const fullscreenStage = $('fullscreen-stage');
 const fullscreenHolder = $('fullscreen-holder');
+const pinsLayer = $('fullscreen-pins');
 let fullscreenId = null;
 let fullscreenView = { x: 0, y: 0, scale: 1 };
 let naturalSize = { w: 1200, h: 900 };
@@ -1098,17 +1188,22 @@ function openFullscreen(id) {
   const sheet = sheetsById.get(id);
   if (!sheet) return;
   cancelActivation();
+  cancelComment();
+  closePopover();
   fullscreenId = id;
-  $('fullscreen-name').textContent = sheet.source_path;
+  $('fullscreen-name').textContent = whereFrom(sheet);
   fullscreenEl.hidden = false;
   fillFullscreen(sheet, { keepView: false });
+  renderPins(sheet);
 }
 
 function fillFullscreen(sheet, { keepView }) {
   const existing = fullscreenHolder.querySelector('img, iframe');
   const wantsFrame = FRAME_KINDS.has(sheet.kind);
   if (!existing || (existing.tagName === 'IFRAME') !== wantsFrame) {
-    fullscreenHolder.textContent = '';
+    // Only the content is replaced: the pins layer stays, so a sheet whose
+    // kind changed under its comments keeps them on screen.
+    if (existing) existing.remove();
     const node = contentNode(sheet);
     node.addEventListener('load', () => {
       if (node.tagName === 'IMG' && node.naturalWidth) {
@@ -1117,7 +1212,7 @@ function fillFullscreen(sheet, { keepView }) {
       if (!keepView) fitFullscreen();
     });
     node.src = sheet.content_url;
-    fullscreenHolder.appendChild(node);
+    fullscreenHolder.insertBefore(node, pinsLayer);
   } else {
     existing.src = sheet.content_url;
     ring(fullscreenHolder);
@@ -1146,19 +1241,31 @@ function fitFullscreen() {
 function applyFullscreenView() {
   fullscreenHolder.style.transform =
     'translate(' + fullscreenView.x + 'px, ' + fullscreenView.y + 'px) scale(' + fullscreenView.scale + ')';
+  // The pins ride inside the scaled holder and undo the scale on themselves,
+  // so a pin is the same small circle at 2% and at 3200%.
+  fullscreenHolder.style.setProperty('--pin-scale', 1 / fullscreenView.scale);
+  closePopover();
+  positionEditor();
 }
 
 function closeFullscreen() {
+  cancelComment();
+  closePopover();
   fullscreenEl.hidden = true;
   fullscreenId = null;
-  fullscreenHolder.textContent = '';
+  const content = fullscreenHolder.querySelector('img, iframe');
+  if (content) content.remove();
+  pinsLayer.textContent = '';
+  pinsInBar.textContent = '';
 }
 
 $('fullscreen-close').addEventListener('click', closeFullscreen);
 $('fullscreen-reset').addEventListener('click', fitFullscreen);
 
 fullscreenStage.addEventListener('pointerdown', (e) => {
-  if (e.target.closest('#fullscreen-bar')) return;
+  if (e.target.closest('#fullscreen-bar, .pin-label')) return;
+  closePopover();
+  if (commentMode && e.button === 0 && fullscreenHolder.contains(e.target)) return beginCommentDrag(e);
   const start = { x: e.clientX, y: e.clientY, vx: fullscreenView.x, vy: fullscreenView.y };
   fullscreenStage.classList.add('panning');
   captureDrag(e, {
@@ -1190,6 +1297,291 @@ fullscreenStage.addEventListener(
   { passive: false }
 );
 
+// --- comments: pins on the figure -----------------------------------------
+
+/* The user pins a comment on a figure, in fullscreen: a rectangle, a point,
+   or the whole sheet. A comment is a record on the sheet — not layout — so
+   nothing here can move anything. The pins are the one accepted exception to
+   "nothing paints over a figure", and they are kept small for it.
+
+   The anchor is stored as fractions of the content's natural box. Nothing the
+   browser measured is sent: the holder is the natural box, so a fraction of
+   its rect is a fraction of the figure at any zoom. */
+
+const pinsInBar = $('fullscreen-pins-sheet');
+const commentBtn = $('fullscreen-comment');
+const commentHint = $('comment-hint');
+const editorEl = $('comment-editor');
+const editorText = $('comment-text');
+const editorHint = editorEl.querySelector('.hint');
+const popoverEl = $('comment-popover');
+const EDITOR_HINT = editorHint.textContent;
+
+/** Armed: the next drag or click on the figure places a comment. */
+let commentMode = false;
+/** The anchor being typed for, once a spot has been chosen. `undefined` means
+ *  no editor is open; `null` is a comment on the whole sheet. */
+let pendingAnchor;
+let pendingPin = null;
+/** The comment whose popover is showing. */
+let openCommentId = null;
+
+function commentInProgress() {
+  return commentMode || !editorEl.hidden;
+}
+
+function fullscreenSheet() {
+  return fullscreenId === null ? null : sheetsById.get(fullscreenId) || null;
+}
+
+function setCommentBadge(el, sheet) {
+  const badge = el.querySelector('.sheet-comments');
+  if (!badge) return;
+  const n = sheet.open_comments || 0;
+  badge.hidden = n === 0;
+  badge.textContent = n;
+  badge.title = n === 1 ? '1 open comment' : n + ' open comments';
+}
+
+/** A sheet's record changed — a comment came or went. Update what shows it
+ *  and nothing else: no ring, no re-render, no layout. */
+function changeInPlace(sheet) {
+  if (!sheetsById.has(sheet.id)) return;
+  Object.assign(sheetsById.get(sheet.id), sheet);
+  for (const el of nodes.values()) {
+    if (el.dataset.sheetId === sheet.id) setCommentBadge(el, sheet);
+  }
+  if (fullscreenId === sheet.id) renderPins(sheet);
+}
+
+/** Draw every open pin for the sheet under the lamp. Anchored comments go on
+ *  the figure; sheet-level ones line up in the bar. */
+function renderPins(sheet) {
+  pinsLayer.textContent = '';
+  pinsInBar.textContent = '';
+  if (pendingPin) pinsLayer.appendChild(pendingPin);
+  for (const comment of sheet.comments || []) {
+    if (comment.resolved_at !== null) continue;
+    const hollow = comment.version !== sheet.version;
+    const label = document.createElement('button');
+    label.className = 'pin-label';
+    label.dataset.commentId = comment.id;
+    label.textContent = hollow ? comment.number + '·v' + comment.version : comment.number;
+    label.title = (hollow ? 'made on v' + comment.version + ': ' : '') + comment.text;
+    label.addEventListener('click', (e) => {
+      e.stopPropagation();
+      showPopover(comment.id, label);
+    });
+    if (!comment.anchor) {
+      if (hollow) label.classList.add('hollow');
+      pinsInBar.appendChild(label);
+      continue;
+    }
+    const pin = document.createElement('div');
+    const a = comment.anchor;
+    pin.className = 'pin ' + (a.w > 0 || a.h > 0 ? 'rect' : 'point') + (hollow ? ' hollow' : '');
+    placePin(pin, a);
+    pin.appendChild(label);
+    pinsLayer.appendChild(pin);
+  }
+  if (openCommentId !== null && !pinsLayer.querySelector('[data-comment-id="' + openCommentId + '"]') &&
+      !pinsInBar.querySelector('[data-comment-id="' + openCommentId + '"]')) {
+    closePopover();
+  }
+}
+
+function placePin(pin, a) {
+  pin.style.left = a.x * 100 + '%';
+  pin.style.top = a.y * 100 + '%';
+  pin.style.width = a.w * 100 + '%';
+  pin.style.height = a.h * 100 + '%';
+}
+
+/** Enter comment mode, or for a framed sheet go straight to the editor: an
+ *  iframe eats pointer events and has no natural box, so it takes comments on
+ *  the whole sheet only. */
+function armComment() {
+  const sheet = fullscreenSheet();
+  if (!sheet) return;
+  closePopover();
+  if (!editorEl.hidden) return editorText.focus();
+  if (FRAME_KINDS.has(sheet.kind)) return openEditor(null);
+  commentMode = !commentMode;
+  fullscreenEl.classList.toggle('commenting', commentMode);
+  commentBtn.classList.toggle('armed', commentMode);
+  commentHint.hidden = !commentMode;
+}
+
+commentBtn.addEventListener('click', armComment);
+
+/** Fractions of the figure under a point on screen, clamped to the box. */
+function holderFraction(clientX, clientY) {
+  const r = fullscreenHolder.getBoundingClientRect();
+  const clamp = (v) => Math.min(1, Math.max(0, v));
+  return {
+    x: r.width ? clamp((clientX - r.left) / r.width) : 0,
+    y: r.height ? clamp((clientY - r.top) / r.height) : 0,
+  };
+}
+
+function beginCommentDrag(e) {
+  const from = holderFraction(e.clientX, e.clientY);
+  const anchorAt = (ev) => {
+    const to = holderFraction(ev.clientX, ev.clientY);
+    const x = Math.min(from.x, to.x);
+    const y = Math.min(from.y, to.y);
+    return { x, y, w: Math.max(from.x, to.x) - x, h: Math.max(from.y, to.y) - y };
+  };
+  let moved = false;
+  pendingPin = document.createElement('div');
+  pendingPin.className = 'pin rect pending';
+  placePin(pendingPin, { ...from, w: 0, h: 0 });
+  pinsLayer.appendChild(pendingPin);
+  captureDrag(e, {
+    move(ev) {
+      if (Math.abs(ev.clientX - e.clientX) > CLICK_SLOP || Math.abs(ev.clientY - e.clientY) > CLICK_SLOP) moved = true;
+      if (moved) placePin(pendingPin, anchorAt(ev));
+    },
+    up(ev) {
+      // A click is a point: a rectangle of zero size.
+      openEditor(moved ? anchorAt(ev) : { x: from.x, y: from.y, w: 0, h: 0 });
+    },
+  });
+}
+
+/** Ask for the text. The spot has been chosen; comment mode is over. */
+function openEditor(anchor) {
+  commentMode = false;
+  commentBtn.classList.remove('armed');
+  commentHint.hidden = true;
+  fullscreenEl.classList.add('commenting');
+  pendingAnchor = anchor;
+  if (anchor) {
+    if (!pendingPin) {
+      pendingPin = document.createElement('div');
+      pinsLayer.appendChild(pendingPin);
+    }
+    pendingPin.className = 'pin pending ' + (anchor.w > 0 || anchor.h > 0 ? 'rect' : 'point');
+    placePin(pendingPin, anchor);
+  } else if (pendingPin) {
+    pendingPin.remove();
+    pendingPin = null;
+  }
+  editorHint.textContent = anchor ? EDITOR_HINT : 'On the whole sheet · ' + EDITOR_HINT;
+  editorEl.hidden = false;
+  positionEditor();
+  editorText.focus();
+}
+
+/** Keep the editor beside its spot as the figure pans and zooms. */
+function positionEditor() {
+  if (editorEl.hidden) return;
+  const pad = 12;
+  let left;
+  let top;
+  if (pendingAnchor) {
+    const r = fullscreenHolder.getBoundingClientRect();
+    left = r.left + (pendingAnchor.x + pendingAnchor.w) * r.width + pad;
+    top = r.top + pendingAnchor.y * r.height;
+  } else {
+    left = (window.innerWidth - editorEl.offsetWidth) / 2;
+    top = 64;
+  }
+  left = Math.max(pad, Math.min(left, window.innerWidth - editorEl.offsetWidth - pad));
+  top = Math.max(pad, Math.min(top, window.innerHeight - editorEl.offsetHeight - pad));
+  editorEl.style.left = left + 'px';
+  editorEl.style.top = top + 'px';
+}
+
+function cancelComment() {
+  commentMode = false;
+  pendingAnchor = undefined;
+  if (pendingPin) {
+    pendingPin.remove();
+    pendingPin = null;
+  }
+  editorEl.hidden = true;
+  editorText.value = '';
+  editorHint.textContent = EDITOR_HINT;
+  commentHint.hidden = true;
+  commentBtn.classList.remove('armed');
+  fullscreenEl.classList.remove('commenting');
+}
+
+async function saveComment() {
+  const text = editorText.value.trim();
+  if (!text || pendingAnchor === undefined || fullscreenId === null) return;
+  try {
+    const { sheet } = await apiPost('/api/comments', {
+      op: 'add',
+      sheet_id: fullscreenId,
+      anchor: pendingAnchor,
+      text,
+    });
+    cancelComment();
+    changeInPlace(sheet);
+  } catch (err) {
+    console.error('comment', err);
+    editorHint.textContent = String(err.message || err);
+  }
+}
+
+// The window's key handler ignores a textarea, so the editor answers for
+// itself: Enter saves, Escape cancels the comment and nothing more.
+editorText.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    saveComment();
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    e.stopPropagation();
+    cancelComment();
+  }
+});
+
+function showPopover(commentId, at) {
+  const sheet = fullscreenSheet();
+  const comment = sheet && (sheet.comments || []).find((c) => c.id === commentId);
+  if (!comment) return;
+  openCommentId = commentId;
+  const hollow = comment.version !== sheet.version;
+  $('comment-popover-head').textContent =
+    '#' + comment.number + ' · ' +
+    (hollow ? 'made on v' + comment.version + ', now v' + sheet.version : 'v' + comment.version) +
+    (comment.anchor ? '' : ' · whole sheet');
+  $('comment-popover-text').textContent = comment.text;
+  popoverEl.hidden = false;
+  const r = at.getBoundingClientRect();
+  const pad = 12;
+  let left = r.right + 8;
+  let top = r.top - 6;
+  left = Math.max(pad, Math.min(left, window.innerWidth - popoverEl.offsetWidth - pad));
+  top = Math.max(pad, Math.min(top, window.innerHeight - popoverEl.offsetHeight - pad));
+  popoverEl.style.left = left + 'px';
+  popoverEl.style.top = top + 'px';
+}
+
+function closePopover() {
+  openCommentId = null;
+  popoverEl.hidden = true;
+}
+
+async function commentOp(op) {
+  if (openCommentId === null || fullscreenId === null) return;
+  const params = { op, sheet_id: fullscreenId, comment_id: openCommentId };
+  closePopover();
+  try {
+    const { sheet } = await apiPost('/api/comments', params);
+    changeInPlace(sheet);
+  } catch (err) {
+    console.error('comment', op, err);
+    await refresh();
+  }
+}
+
+$('comment-resolve').addEventListener('click', () => commentOp('resolve'));
+$('comment-remove').addEventListener('click', () => commentOp('remove'));
+
 // --- wheel, keys ----------------------------------------------------------
 
 viewportEl.addEventListener(
@@ -1208,12 +1600,30 @@ viewportEl.addEventListener(
 window.addEventListener('keydown', (e) => {
   if (e.target.matches('input, textarea')) return;
   if (e.key === 'Escape') {
-    if (!fullscreenEl.hidden) return closeFullscreen();
+    if (!fullscreenEl.hidden) {
+      // A comment in progress is what Escape cancels; the next one closes
+      // the view, as before.
+      if (commentInProgress()) return cancelComment();
+      if (!popoverEl.hidden) return closePopover();
+      return closeFullscreen();
+    }
     if (!trashPanel.hidden) return (trashPanel.hidden = true);
     if (activeId !== null) return deactivate();
     if (anyPileOpen()) return layoutOp('close_piles', {});
   }
-  if (!fullscreenEl.hidden) return;
+  if (!fullscreenEl.hidden) {
+    if (e.key === 'c') armComment();
+    if (e.key === 'Enter' && commentMode) openEditor(null);
+    return;
+  }
+  // The sheet the user clicked goes in the trash. Same act as its ×, and as
+  // recoverable: the trash corner brings it back.
+  if ((e.key === 'Delete' || e.key === 'Backspace') && activeId !== null) {
+    e.preventDefault();
+    const id = activeId;
+    deactivate();
+    return trashSheet(id);
+  }
   if (e.key === 't') cycleSkin();
   if (e.key === '0') goHome();
   if (e.key === 'f') goOverview();
@@ -1250,6 +1660,10 @@ function listen() {
   // The whole point of the desk: no move, no scroll, no reflow, no refetch.
   source.addEventListener('sheet.version', (e) => swapInPlace(JSON.parse(e.data).sheet));
 
+  // A comment was added, resolved, or removed — on this page or another. The
+  // sheet's record changed and nothing else did: no ring, nothing moves.
+  source.addEventListener('sheet.changed', (e) => changeInPlace(JSON.parse(e.data).sheet));
+
   source.addEventListener('sheet.trashed', (e) => {
     const data = JSON.parse(e.data);
     state.sheets = state.sheets.filter((s) => s.id !== data.sheet_id);
@@ -1258,6 +1672,18 @@ function listen() {
     adoptGeometry(data.geometry);
     refresh();
   });
+
+  source.addEventListener('desk.cleared', (e) => {
+    const data = JSON.parse(e.data);
+    state.sheets = [];
+    indexSheets();
+    state.layout = data.layout;
+    adoptGeometry(data.geometry);
+    refresh();
+  });
+
+  // Another page, or the command, brought a different desk out.
+  source.addEventListener('desk.changed', () => refresh());
 
   source.addEventListener('sheet.restored', (e) => {
     const data = JSON.parse(e.data);

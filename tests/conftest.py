@@ -45,6 +45,10 @@ class DeskServer:
         self.port = _free_port()
         self._env = env
         self.proc: subprocess.Popen | None = None
+        # The server's log goes to a file, never to a pipe nobody reads: a
+        # pipe fills, the next log line blocks, and every request after it
+        # hangs — which reads as a server bug and is not one.
+        self.log_path = data_dir.parent / f"desk-{self.port}.log"
         self.start()
 
     # -- process lifetime -------------------------------------------------
@@ -59,20 +63,22 @@ class DeskServer:
             }
         )
         env.update(self._env)
-        self.proc = subprocess.Popen(
-            [sys.executable, "-m", "desk.server"],
-            cwd=REPO,
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-        )
+        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.log_path, "ab") as log:
+            self.proc = subprocess.Popen(
+                [sys.executable, "-m", "desk.server"],
+                cwd=REPO,
+                env=env,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+            )
         self._await_port()
 
     def _await_port(self, timeout: float = 20.0) -> None:
         deadline = time.time() + timeout
         while time.time() < deadline:
             if self.proc.poll() is not None:
-                out = self.proc.stdout.read().decode("utf-8", "replace")
+                out = self.log_path.read_text(errors="replace")
                 raise RuntimeError(f"desk server exited early:\n{out}")
             try:
                 with socket.create_connection(("127.0.0.1", self.port), 0.2):
@@ -118,9 +124,28 @@ class DeskServer:
     def post(self, path: str, body, **kw) -> Response:
         return self.request("POST", path, body=body, **kw)
 
+    @property
+    def desk_dir(self) -> Path:
+        """Where the `main` desk keeps its files."""
+        return self.data_dir / "desks" / "main"
+
     # -- desk vocabulary --------------------------------------------------
     def publish(self, source_path) -> Response:
         return self.post("/api/publish", {"source_path": str(source_path)})
+
+    def send(self, origin: str, source_path: str, data: bytes) -> Response:
+        """What another machine's `desk present --to` puts on the wire: the
+        file's bytes, the path it has over there, and the name it sends under."""
+        import base64
+
+        return self.post(
+            "/api/publish",
+            {
+                "origin": origin,
+                "source_path": source_path,
+                "content": base64.b64encode(data).decode("ascii"),
+            },
+        )
 
     def state(self) -> dict:
         resp = self.get("/api/state")
@@ -253,6 +278,28 @@ PNG = bytes.fromhex(
     "01f15c4890000000d49444154789c6360000002000100ffff03000006"
     "000557bfabd40000000049454e44ae426082"
 )
+
+
+def png(width: int, height: int) -> bytes:
+    """A valid, blank PNG of the given size — a raster figure with a natural size."""
+    import struct
+    import zlib
+
+    def chunk(kind: bytes, body: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(body))
+            + kind
+            + body
+            + struct.pack(">I", zlib.crc32(kind + body) & 0xFFFFFFFF)
+        )
+
+    raw = b"".join(b"\x00" + b"\xff" * (width * 3) for _ in range(height))
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(raw))
+        + chunk(b"IEND", b"")
+    )
 
 
 def run_desk(*args, cwd=None, port=None, data_dir=None, env=None, timeout=60):

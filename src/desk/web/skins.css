@@ -62,6 +62,15 @@ html[data-skin="day"] {
   --ink-dim: #cbbfa9;
   --accent: #ffcf6b;
 
+  /* A comment's pin: one raspberry ink, chosen to be nothing a plot would
+     use, on white paper under flat daylight. */
+  --pin: #c2255c;
+  --pin-ink: #ffffff;
+  --pin-hollow: rgba(255, 255, 255, .88);
+  --pin-halo: rgba(255, 255, 255, .75);
+  --comment-badge: #c2255c;
+  --comment-badge-ink: #ffffff;
+
   /* Daylight is flat and from everywhere, so paper needs a crisper contact
      line here than it does under a lamp — a light desk is where a white sheet
      most easily stops reading as an object. */
@@ -139,6 +148,15 @@ html[data-skin="night"] {
   --ink: #f0e2cd;
   --ink-dim: #a2907a;
   --accent: #ffd08a;
+
+  /* The same ink, warmed into the lamplight. Still on white paper, so it
+     stays dark enough to read there. */
+  --pin: #d2366a;
+  --pin-ink: #fff6ec;
+  --pin-hollow: rgba(255, 250, 240, .9);
+  --pin-halo: rgba(255, 250, 240, .7);
+  --comment-badge: #d2366a;
+  --comment-badge-ink: #fff6ec;
 
   --paper-shadow:
     0 1px 2px rgba(0, 0, 0, .55),

@@ -51,7 +51,9 @@ already said:
 - **This machine only** → nothing to do. The installer binds `127.0.0.1`.
 - **Other machines too** → they need [Tailscale](https://tailscale.com)
   installed and up on both. Check with `tailscale status`. The installer
-  detects a live tailnet and binds there by itself.
+  detects a live tailnet and binds there by itself. This is also what lets
+  other people put figures on this desk with `/desk <path> --to <this
+  machine>`: a desk bound to `127.0.0.1` cannot receive from anyone.
 
 If they name a specific address instead — a LAN IP, a VPN interface — pass it
 as `DESK_HOST` and tell them plainly that anyone who can reach that address has
@@ -87,7 +89,9 @@ Three checks, in this order. Each one rules out a different failure.
 desk status
 ```
 
-Prints the URL, the sheet counts, the data directory, and the log path. If the
+Prints the URL, the sheet counts, the data directory, and the log path. (The
+other commands are `desk present [path] [--to machine]` and `desk feedback
+[path] [--json]`; `desk --help` lists them.) If the
 shell cannot find `desk`, call `~/.local/bin/desk` and tell the user their PATH
 is missing `~/.local/bin`.
 
@@ -122,7 +126,15 @@ Tell them, in this order:
    with no argument for the newest figure, or with a path for a specific one.
 3. That presenting once is enough. The desk watches the file; re-running the
    script updates the sheet in place.
-4. Which agents got the skill — quote the `desk: skill ->` lines. If none were
+3a. That they can pin comments on a figure — double-click it, press `c`, drag
+   a rectangle or click a point, type, `Enter` — and `/desk feedback` has the
+   agent read them back and fix the code. From a shell that is `desk
+   feedback [path] [--json]`. They resolve a comment when it is dealt with;
+   the agent never does.
+4. That `/desk <path> --to <machine>` puts a figure on someone else's desk,
+   if they run one on the tailnet — and that this machine's tailnet name is
+   what they would type to send one back.
+5. Which agents got the skill — quote the `desk: skill ->` lines. If none were
    linked, their agent keeps skills somewhere the installer does not know, and
    they can name it:
    `DESK_SKILL_DIRS="$HOME/.myagent/skills/desk" sh scripts/install.sh`
@@ -138,8 +150,11 @@ Tell them, in this order:
 | `Address already in use` in the log | something else holds the port | `DESK_PORT=7788 sh scripts/install.sh` |
 | `desk: command not found` | `~/.local/bin` is not on PATH | call `~/.local/bin/desk`, and tell the user to add it |
 | `could not reach the desk` | the server is not answering | `desk status`, then the log |
+| `not running` from `desk feedback` | the desk is down; `feedback` never starts it | `desk status`, then the log; a `desk present` starts it |
 | `is not a desk file type` | the desk takes `.svg`, `.png`, `.pdf`, `.html`, `.md` | render it to a self-contained HTML file and present that |
-| the desk is up but a sheet never updates | the file changed on a *different* machine from the server | present from the machine running the desk |
+| the desk is up but a sheet never updates | the file changed on a *different* machine from the server | present from the machine running the desk, or send it again with `--to` |
+| `could not reach <machine>'s desk` when sending | their desk is not running, or is bound to `127.0.0.1` | on their machine: `desk status`, and `DESK_BIND=tailnet sh scripts/install.sh` |
+| a sent sheet shows `from <name>` but never updates | that is what a sent sheet is — a copy | send it again; it updates in place |
 
 Read the log before guessing. The desk writes a traceback for anything that
 kills it, and `desk status` prints the log's path on every platform.
@@ -179,7 +194,10 @@ and they are baked into the service it writes, so once is enough.
 | anything else | nothing — the user starts the server themselves | up to them |
 
 Everywhere: the `desk` command at `~/.local/bin/desk`, a symlink to
-`skill/desk` in each agent's skills directory, and the sheets in `~/.desk`.
+`skill/desk` in each agent's skills directory, and the sheets in `~/.desk`,
+one directory per desk under `~/.desk/desks/`. A `~/.desk` from before there
+were several desks is moved into `desks/main/` the first time the new server
+starts.
 
 To run the server in the foreground instead — for a platform with no service,
 or to watch it start:

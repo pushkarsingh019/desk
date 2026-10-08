@@ -123,7 +123,7 @@ def test_a_new_version_serves_the_new_content_and_keeps_the_old_one(desk, figure
     second = desk.publish(fig).json()["sheet"]
 
     assert desk.get(second["content_url"]).text == SVG.format(color="blue")
-    assert desk.get(f"/api/content/{first['id']}/1").text == SVG.format(color="red")
+    assert desk.get(f"/api/content/main/{first['id']}/1").text == SVG.format(color="red")
 
 
 def test_a_new_version_leaves_position_and_size_untouched(desk, figures):
@@ -154,8 +154,8 @@ def test_version_history_caps_at_twenty_and_the_oldest_is_evicted(desk, figures)
     assert sheet["version"] == 21
     assert sheet["versions"] == list(range(2, 22))
     assert len(sheet["versions"]) == 20
-    assert desk.get(f"/api/content/{sheet['id']}/1").status == 404
-    assert desk.get(f"/api/content/{sheet['id']}/2").status == 200
+    assert desk.get(f"/api/content/main/{sheet['id']}/1").status == 404
+    assert desk.get(f"/api/content/main/{sheet['id']}/2").status == 200
 
 
 def test_a_disallowed_extension_is_rejected_with_a_clear_error(desk, figures):
@@ -338,7 +338,7 @@ def test_changing_a_published_file_creates_a_version_with_no_second_publish(desk
         lambda s: any(x["id"] == sheet["id"] and x["version"] == 2 for x in s["sheets"]),
         what="version 2 from the watcher",
     )
-    assert desk.get(f"/api/content/{sheet['id']}/2").text == SVG.format(color="blue")
+    assert desk.get(f"/api/content/main/{sheet['id']}/2").text == SVG.format(color="blue")
 
 
 def test_changing_a_watched_file_emits_an_sse_event(desk, figures):
@@ -574,6 +574,60 @@ def test_trashing_a_sheet_the_desk_does_not_have_is_a_clear_404(desk):
     resp = desk.post("/api/trash", {"sheet_id": "nosuchsheet"})
 
     assert resp.status == 404
+
+
+def test_clearing_the_desk_throws_every_sheet_into_the_trash(desk, figures):
+    placed, waiting = figures / "placed.svg", figures / "waiting.svg"
+    placed.write_text(SVG.format(color="red"))
+    waiting.write_text(SVG.format(color="blue"))
+    placed_id = desk.publish(placed).json()["sheet"]["id"]
+    waiting_id = desk.publish(waiting).json()["sheet"]["id"]
+    desk.post("/api/layout", {"op": "place", "sheet_id": placed_id, "x": 500, "y": 500})
+
+    resp = desk.post("/api/clear", {})
+
+    assert resp.status == 200
+    assert sorted(resp.json()["trashed"]) == sorted([placed_id, waiting_id])
+    state = desk.state()
+    assert state["sheets"] == []
+    assert sorted(s["id"] for s in state["trash"]) == sorted([placed_id, waiting_id])
+    assert state["layout"]["sheets"] == {}
+
+
+def test_a_cleared_sheet_is_not_resurrected_by_a_file_change_but_can_be_restored(desk, figures):
+    import time
+
+    fig = figures / "fit.svg"
+    fig.write_text(SVG.format(color="red"))
+    sid = desk.publish(fig).json()["sheet"]["id"]
+    desk.post("/api/clear", {})
+
+    fig.write_text(SVG.format(color="blue"))
+    time.sleep(1.0)
+    assert desk.state()["sheets"] == []
+
+    desk.post("/api/restore", {"sheet_id": sid})
+    assert [s["id"] for s in desk.state()["sheets"]] == [sid]
+
+
+def test_clearing_emits_one_event_so_an_open_page_empties(desk, figures):
+    for name in ("one.svg", "two.svg"):
+        (figures / name).write_text(SVG.format(color="red"))
+        desk.publish(figures / name)
+
+    with desk.events() as stream:
+        desk.post("/api/clear", {})
+        event = stream.await_event("desk.cleared")
+
+    assert len(event["trashed"]) == 2
+    assert event["layout"]["sheets"] == {}
+
+
+def test_clearing_an_empty_desk_is_harmless(desk):
+    resp = desk.post("/api/clear", {})
+
+    assert resp.status == 200
+    assert resp.json()["trashed"] == []
 
 
 # --- 11: remaining renderers ----------------------------------------------
@@ -946,7 +1000,7 @@ def test_a_desk_whose_layout_is_not_readable_json_serves_a_desk_the_browser_can_
     fig.write_text(SVG.format(color="red"))
     sid = desk.publish(fig).json()["sheet"]["id"]
     desk.stop()
-    (desk.data_dir / "layout.json").write_text('{"sheets": {"' + sid + '": {"x": NaN}}}')
+    (desk.desk_dir / "layout.json").write_text('{"sheets": {"' + sid + '": {"x": NaN}}}')
     desk.start()
 
     strict_json(desk.get("/api/state").body)
@@ -960,7 +1014,7 @@ def test_a_desk_whose_layout_file_is_damaged_still_starts_with_every_sheet(desk,
 
     for damage in ['{"sheets": {"a": ', "null", "[1, 2]", '{"sheets": "nope"}', '{"sheets": {"a": {}}}']:
         desk.stop()
-        (desk.data_dir / "layout.json").write_text(damage)
+        (desk.desk_dir / "layout.json").write_text(damage)
         desk.start()
 
         assert desk.sheet_for(fig) is not None, damage
@@ -975,7 +1029,7 @@ def test_a_desk_whose_sheet_index_is_damaged_still_starts(desk, figures):
     for damage in ['{"sheets": [{"id": "abc"', "null", "[]", '{"sheets": [{"id": "abc"}]}',
                    '{"sheets": [{"id": "abc", "source_path": 5, "kind": "svg", "versions": []}]}']:
         desk.stop()
-        (desk.data_dir / "sheets.json").write_text(damage)
+        (desk.desk_dir / "sheets.json").write_text(damage)
         desk.start()
 
         assert desk.get("/api/state").status == 200, damage
@@ -988,7 +1042,7 @@ def test_a_content_url_naming_a_version_that_is_not_a_number_is_a_404(desk, figu
     sheet = desk.publish(fig).json()["sheet"]
 
     for bad in ("banana", "-1", "1.5", "%C2%B2"):
-        resp = desk.get(f"/api/content/{sheet['id']}/{bad}")
+        resp = desk.get(f"/api/content/main/{sheet['id']}/{bad}")
         assert resp.status == 404, f"{bad} -> {resp.status} {resp.text[:80]}"
 
 
@@ -998,7 +1052,7 @@ def test_a_content_url_may_only_be_cached_forever_when_it_names_a_version(desk, 
     sheet = desk.publish(fig).json()["sheet"]
 
     versioned = desk.get(sheet["content_url"])
-    unversioned = desk.get(f"/api/content/{sheet['id']}")
+    unversioned = desk.get(f"/api/content/main/{sheet['id']}")
 
     assert "immutable" in versioned.headers["Cache-Control"]
     assert "immutable" not in unversioned.headers["Cache-Control"]
@@ -1165,7 +1219,7 @@ def test_publishing_the_same_path_from_many_threads_at_once_makes_one_sheet(desk
     assert len(sheets) == 1
     assert sheets[0]["versions"] == list(range(1, 9))
     for n in sheets[0]["versions"]:
-        assert desk.get(f"/api/content/{sheets[0]['id']}/{n}").status == 200
+        assert desk.get(f"/api/content/main/{sheets[0]['id']}/{n}").status == 200
 
 
 def test_a_figure_inside_a_tmp_directory_is_rejected(desk, figures):
@@ -1311,3 +1365,999 @@ def test_every_event_that_carries_a_layout_carries_the_geometry_that_goes_with_i
     for event in (created, trashed, restored):
         assert "geometry" in event, event["type"]
         assert "bounds" in event["geometry"]
+
+
+# --- 16: someone else's desk ----------------------------------------------
+
+import time as _time  # noqa: E402
+
+from conftest import _free_port  # noqa: E402
+
+ALICE_PATH = "/Users/alice/figs/fit.svg"
+
+
+def _closed(port: int) -> bool:
+    with _socket.socket() as s:
+        s.settimeout(0.3)
+        return s.connect_ex(("127.0.0.1", port)) != 0
+
+
+def _by_id(desk, sheet_id):
+    return next(s for s in desk.sheets() if s["id"] == sheet_id)
+
+
+def test_a_figure_sent_from_another_machine_lands_in_the_inbox_marked_with_its_origin(desk):
+    resp = desk.send("alice-mac", ALICE_PATH, SVG.format(color="red").encode())
+
+    assert resp.status == 200, resp.text
+    sheet = resp.json()["sheet"]
+    assert sheet["origin"] == "alice-mac"
+    assert sheet["source_path"] == ALICE_PATH
+    assert sheet["name"] == "fit.svg"
+    assert sheet["kind"] == "svg"
+    assert sheet["version"] == 1
+    state = desk.state()
+    assert [s["id"] for s in state["sheets"]] == [sheet["id"]]
+    assert state["layout"]["sheets"][sheet["id"]]["inbox"] is True
+    assert desk.get(sheet["content_url"]).text == SVG.format(color="red")
+
+
+def test_a_sheet_published_here_has_no_origin(desk, figures):
+    fig = figures / "fit.svg"
+    fig.write_text(SVG.format(color="red"))
+
+    assert desk.publish(fig).json()["sheet"]["origin"] is None
+
+
+def test_sending_the_same_file_again_updates_that_sheet_in_place(desk):
+    first = desk.send("alice-mac", ALICE_PATH, SVG.format(color="red").encode()).json()["sheet"]
+    sid = first["id"]
+    desk.post("/api/layout", {"op": "place", "sheet_id": sid, "x": 640, "y": 300})
+    desk.post("/api/layout", {"op": "resize", "sheet_id": sid, "w": 900, "h": 700})
+    before = desk.state()["layout"]["sheets"][sid]
+
+    second = desk.send("alice-mac", ALICE_PATH, SVG.format(color="blue").encode()).json()["sheet"]
+
+    assert second["id"] == sid
+    assert second["version"] == 2
+    assert len(desk.sheets()) == 1
+    assert desk.state()["layout"]["sheets"][sid] == before
+    assert desk.get(second["content_url"]).text == SVG.format(color="blue")
+
+
+def test_the_same_path_sent_from_two_machines_is_two_sheets(desk):
+    alice = desk.send("alice-mac", "/tmp/fit.svg", SVG.format(color="red").encode()).json()["sheet"]
+    bob = desk.send("bob-mac", "/tmp/fit.svg", SVG.format(color="blue").encode()).json()["sheet"]
+
+    assert alice["id"] != bob["id"]
+    assert sorted(s["origin"] for s in desk.sheets()) == ["alice-mac", "bob-mac"]
+
+
+def test_a_sent_sheet_and_a_local_sheet_at_the_same_path_are_two_sheets(desk, figures):
+    fig = figures / "fit.svg"
+    fig.write_text(SVG.format(color="red"))
+    local = desk.publish(fig).json()["sheet"]
+
+    sent = desk.send("alice-mac", str(fig), SVG.format(color="blue").encode()).json()["sheet"]
+
+    assert local["id"] != sent["id"]
+    assert desk.get(local["content_url"]).text == SVG.format(color="red")
+    assert desk.get(sent["content_url"]).text == SVG.format(color="blue")
+
+
+def test_a_sent_sheet_is_never_watched_even_when_that_path_exists_here(desk, figures):
+    fig = figures / "fit.svg"
+    fig.write_text(SVG.format(color="red"))
+    sent = desk.send("alice-mac", str(fig), SVG.format(color="blue").encode()).json()["sheet"]
+
+    fig.write_text(SVG.format(color="green"))
+    _time.sleep(1.0)
+
+    assert _by_id(desk, sent["id"])["version"] == 1
+    assert desk.get(sent["content_url"]).text == SVG.format(color="blue")
+
+    desk.restart()
+    fig.write_text(SVG.format(color="black"))
+    _time.sleep(1.0)
+
+    again = _by_id(desk, sent["id"])
+    assert again["version"] == 1
+    assert again["origin"] == "alice-mac"
+    assert desk.get(again["content_url"]).text == SVG.format(color="blue")
+
+
+def test_a_sent_sheet_the_user_threw_away_comes_back_when_it_is_sent_again(desk):
+    first = desk.send("alice-mac", ALICE_PATH, SVG.format(color="red").encode()).json()["sheet"]
+    desk.post("/api/trash", {"sheet_id": first["id"]})
+    assert desk.sheets() == []
+
+    second = desk.send("alice-mac", ALICE_PATH, SVG.format(color="blue").encode()).json()["sheet"]
+
+    assert second["id"] == first["id"]
+    assert second["version"] == 2
+    state = desk.state()
+    assert [s["id"] for s in state["sheets"]] == [first["id"]]
+    assert state["trash"] == []
+    assert state["layout"]["sheets"][first["id"]]["inbox"] is True
+
+
+def test_sending_emits_a_created_event_that_names_the_origin(desk):
+    with desk.events() as stream:
+        desk.send("alice-mac", ALICE_PATH, SVG.format(color="red").encode())
+        event = stream.await_event("sheet.created")
+
+    assert event["sheet"]["origin"] == "alice-mac"
+    assert event["sheet"]["name"] == "fit.svg"
+    assert event["layout"]["sheets"][event["sheet"]["id"]]["inbox"] is True
+
+
+@pytest.mark.parametrize("origin", ["", "alice mac", "alice:mac", "-alice", 7, None])
+def test_a_send_without_a_usable_origin_is_refused(desk, origin):
+    import base64
+
+    body = {"source_path": ALICE_PATH, "content": base64.b64encode(b"<svg/>").decode()}
+    if origin is not None:
+        body["origin"] = origin
+
+    resp = desk.post("/api/publish", body)
+
+    assert resp.status == 400
+    assert "origin" in resp.json()["error"]
+    assert desk.sheets() == []
+
+
+@pytest.mark.parametrize("content", ["not base64!!", 12, None, ["QQ=="]])
+def test_a_send_whose_content_is_not_the_files_bytes_is_refused(desk, content):
+    resp = desk.post("/api/publish", {"origin": "alice-mac", "source_path": ALICE_PATH, "content": content})
+
+    assert resp.status == 400
+    assert "base64" in resp.json()["error"]
+    assert desk.sheets() == []
+
+
+def test_a_send_of_a_file_type_the_desk_does_not_take_is_refused(desk):
+    resp = desk.send("alice-mac", "/Users/alice/table.csv", b"a,b\n")
+
+    assert resp.status == 400
+    assert "not a desk file type" in resp.json()["error"]
+    assert desk.sheets() == []
+
+
+def test_a_send_without_a_path_is_refused(desk):
+    import base64
+
+    resp = desk.post("/api/publish", {"origin": "alice-mac", "content": base64.b64encode(b"<svg/>").decode()})
+
+    assert resp.status == 400
+    assert desk.sheets() == []
+
+
+def test_a_sent_sheet_keeps_its_origin_across_a_restart(desk):
+    sent = desk.send("alice-mac", ALICE_PATH, SVG.format(color="red").encode()).json()["sheet"]
+
+    desk.restart()
+
+    [sheet] = desk.sheets()
+    assert sheet["id"] == sent["id"]
+    assert sheet["origin"] == "alice-mac"
+    assert desk.get(sheet["content_url"]).text == SVG.format(color="red")
+
+
+# -- the desk command, sending ---------------------------------------------
+
+#: Send under the plain hostname: with no Tailscale CLI to ask, the name is
+#: deterministic and the command does not wait on one.
+NO_TAILSCALE = {"DESK_TAILSCALE_CLI": "/nonexistent/tailscale"}
+
+
+def test_desk_present_to_puts_the_figure_on_the_other_desk_and_nothing_here(desk, figures, free_port, tmp_path):
+    fig = figures / "fit.svg"
+    fig.write_text(SVG.format(color="red"))
+
+    proc = run_desk(
+        "present", str(fig), "--to", f"127.0.0.1:{desk.port}",
+        port=free_port, data_dir=tmp_path / "never", env={**NO_TAILSCALE, "DESK_LOG_DIR": str(tmp_path / "logs")},
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert "fit.svg v1" in proc.stdout
+    assert "waiting in 127.0.0.1's inbox" in proc.stdout
+    assert f"http://127.0.0.1:{desk.port}" in proc.stdout
+    [sheet] = desk.sheets()
+    assert sheet["origin"]
+    assert sheet["source_path"] == fig.as_posix()
+    assert desk.get(sheet["content_url"]).text == SVG.format(color="red")
+    # Nothing was started or published on the sending machine.
+    assert "starting the server" not in proc.stderr
+    assert _closed(free_port)
+    assert not (tmp_path / "never").exists()
+
+
+def test_desk_present_to_sends_under_the_same_name_every_time(desk, figures, free_port):
+    fig = figures / "fit.svg"
+    fig.write_text(SVG.format(color="red"))
+    first = run_desk("present", str(fig), "--to", f"http://127.0.0.1:{desk.port}", port=free_port, env=NO_TAILSCALE)
+    assert first.returncode == 0, first.stderr
+
+    fig.write_text(SVG.format(color="blue"))
+    second = run_desk("present", str(fig), "--to", f"http://127.0.0.1:{desk.port}", port=free_port, env=NO_TAILSCALE)
+
+    assert second.returncode == 0, second.stderr
+    assert "fit.svg v2" in second.stdout
+    assert "updated in place on 127.0.0.1's desk" in second.stdout
+    [sheet] = desk.sheets()
+    assert sheet["version"] == 2
+    assert desk.get(sheet["content_url"]).text == SVG.format(color="blue")
+
+
+def test_desk_present_to_an_unreachable_desk_fails_loudly_and_starts_nothing(figures, free_port, tmp_path):
+    fig = figures / "fit.svg"
+    fig.write_text(SVG.format(color="red"))
+    nobody = _free_port()
+
+    proc = run_desk(
+        "present", str(fig), "--to", f"127.0.0.1:{nobody}",
+        port=free_port, data_dir=tmp_path / "never", env=NO_TAILSCALE,
+    )
+
+    assert proc.returncode != 0
+    assert "could not reach 127.0.0.1's desk" in proc.stderr
+    assert "starting the server" not in proc.stderr
+    assert _closed(free_port)
+    assert _closed(nobody)
+
+
+def test_desk_present_to_refuses_a_file_the_other_desk_does_not_take_by_name(desk, figures, free_port):
+    fig = figures / "table.csv"
+    fig.write_text("a,b\n")
+
+    proc = run_desk("present", str(fig), "--to", f"127.0.0.1:{desk.port}", port=free_port, env=NO_TAILSCALE)
+
+    assert proc.returncode != 0
+    assert "not a desk file type" in proc.stderr
+    assert desk.sheets() == []
+
+
+def test_desk_present_to_needs_a_machine_name_or_a_url(figures, free_port):
+    fig = figures / "fit.svg"
+    fig.write_text(SVG.format(color="red"))
+
+    proc = run_desk("present", str(fig), "--to", "bob-mac:notaport", port=free_port, env=NO_TAILSCALE)
+
+    assert proc.returncode != 0
+    assert "--to needs a machine name" in proc.stderr
+    assert _closed(free_port)
+
+
+# --- 17: several desks ----------------------------------------------------
+
+
+def _desks(desk, op, name):
+    return desk.post("/api/desks", {"op": op, "name": name})
+
+
+def test_a_new_desk_starts_with_one_desk_called_main_and_it_is_current(desk):
+    state = desk.state()
+
+    assert state["desk"] == "main"
+    assert state["desks"] == ["main"]
+
+
+def test_creating_a_desk_brings_it_out_and_everything_then_lands_on_it(desk, figures):
+    on_main = figures / "main.svg"
+    on_main.write_text(SVG.format(color="red"))
+    desk.publish(on_main)
+
+    resp = _desks(desk, "create", "paper 1")
+    assert resp.status == 200, resp.text
+    assert resp.json() == {"desk": "paper 1", "desks": ["main", "paper 1"]}
+    assert desk.sheets() == []
+
+    later = figures / "later.svg"
+    later.write_text(SVG.format(color="blue"))
+    on_paper = desk.publish(later).json()["sheet"]
+    desk.send("alice-mac", ALICE_PATH, SVG.format(color="green").encode())
+    assert sorted(s["name"] for s in desk.sheets()) == ["fit.svg", "later.svg"]
+    # The desk's name has a space in it, and the content URL carries it.
+    assert desk.get(on_paper["content_url"]).text == SVG.format(color="blue")
+
+    _desks(desk, "switch", "main")
+    assert [s["name"] for s in desk.sheets()] == ["main.svg"]
+
+
+def test_the_same_file_on_two_desks_is_a_sheet_on_each_and_both_keep_updating(desk, figures):
+    fig = figures / "fit.svg"
+    fig.write_text(SVG.format(color="red"))
+    on_main = desk.publish(fig).json()["sheet"]
+    _desks(desk, "create", "paper")
+    on_paper = desk.publish(fig).json()["sheet"]
+    assert on_paper["content_url"] != on_main["content_url"]
+
+    fig.write_text(SVG.format(color="blue"))
+    desk.await_condition(lambda s: s["sheets"] and s["sheets"][0]["version"] == 2, what="paper's copy to update")
+    _desks(desk, "switch", "main")
+    desk.await_condition(lambda s: s["sheets"] and s["sheets"][0]["version"] == 2, what="main's copy to update")
+
+
+def test_a_versioned_content_url_names_its_desk_so_two_desks_never_share_one(desk, figures):
+    fig = figures / "fit.svg"
+    fig.write_text(SVG.format(color="red"))
+    on_main = desk.publish(fig).json()["sheet"]
+    _desks(desk, "create", "paper")
+    fig.write_text(SVG.format(color="blue"))
+    on_paper = desk.publish(fig).json()["sheet"]
+
+    assert on_main["id"] == on_paper["id"]
+    assert on_main["content_url"].startswith("/api/content/main/")
+    assert on_paper["content_url"].startswith("/api/content/paper/")
+    assert desk.get(on_main["content_url"]).text == SVG.format(color="red")
+    assert desk.get(on_paper["content_url"]).text == SVG.format(color="blue")
+    assert desk.get(f"/api/content/nowhere/{on_main['id']}/1").status == 404
+
+
+def test_only_the_current_desks_events_reach_the_page(desk, figures):
+    fig = figures / "fit.svg"
+    fig.write_text(SVG.format(color="red"))
+    desk.publish(fig)
+    _desks(desk, "create", "paper")
+
+    with desk.events() as stream:
+        fig.write_text(SVG.format(color="blue"))
+        _time.sleep(1.0)
+        _desks(desk, "switch", "main")
+        # Had main's new version reached this page, it would be queued ahead
+        # of the switch; the first thing on the stream must be the switch.
+        event = stream.next_event()
+
+    assert event["type"] == "desk.changed"
+    assert event["desk"] == "main"
+    assert event["desks"] == ["main", "paper"]
+
+
+def test_the_current_desk_survives_a_restart(desk, figures):
+    _desks(desk, "create", "paper")
+    fig = figures / "fit.svg"
+    fig.write_text(SVG.format(color="red"))
+    desk.publish(fig)
+
+    desk.restart()
+
+    state = desk.state()
+    assert state["desk"] == "paper"
+    assert state["desks"] == ["main", "paper"]
+    assert [s["name"] for s in state["sheets"]] == ["fit.svg"]
+
+
+def test_a_data_directory_from_before_there_were_desks_becomes_the_main_desk(desk, figures):
+    fig = figures / "fit.svg"
+    fig.write_text(SVG.format(color="red"))
+    sheet = desk.publish(fig).json()["sheet"]
+    sid = sheet["id"]
+    desk.post("/api/layout", {"op": "place", "sheet_id": sid, "x": 500, "y": 400})
+    desk.stop()
+    import shutil
+
+    for piece in ("sheets.json", "layout.json", "content"):
+        shutil.move(str(desk.desk_dir / piece), str(desk.data_dir / piece))
+    shutil.rmtree(desk.data_dir / "desks")
+    (desk.data_dir / "current.json").unlink(missing_ok=True)
+
+    desk.start()
+
+    state = desk.state()
+    assert state["desk"] == "main"
+    assert [s["id"] for s in state["sheets"]] == [sid]
+    assert state["layout"]["sheets"][sid]["x"] == 500
+    assert desk.get(state["sheets"][0]["content_url"]).text == SVG.format(color="red")
+    assert not (desk.data_dir / "sheets.json").exists()
+
+
+def test_an_empty_desk_can_be_taken_away_but_not_one_with_sheets_or_the_last_one(desk, figures):
+    assert _desks(desk, "remove", "main").status == 400
+
+    _desks(desk, "create", "paper")
+    fig = figures / "fit.svg"
+    fig.write_text(SVG.format(color="red"))
+    desk.publish(fig)
+    refused = _desks(desk, "remove", "paper")
+    assert refused.status == 400
+    assert "still has sheets" in refused.json()["error"]
+
+    desk.post("/api/clear", {})
+    resp = _desks(desk, "remove", "paper")
+    assert resp.status == 200, resp.text
+    assert resp.json() == {"desk": "main", "desks": ["main"]}
+    assert not (desk.data_dir / "desks" / "paper").exists()
+
+
+@pytest.mark.parametrize("name", ["", " ", "../etc", "a/b", "x" * 41, 7, None, "paper 1 "])
+def test_a_desk_name_that_will_not_survive_a_url_or_a_directory_is_refused(desk, name):
+    resp = desk.post("/api/desks", {"op": "create", "name": name})
+
+    assert resp.status == 400
+    assert desk.state()["desks"] == ["main"]
+
+
+def test_creating_a_desk_that_exists_or_switching_to_one_that_does_not_is_a_clear_error(desk):
+    assert _desks(desk, "create", "main").status == 400
+    resp = _desks(desk, "switch", "nowhere")
+    assert resp.status == 400
+    assert "no desk called" in resp.json()["error"]
+
+
+def test_desk_status_says_which_desk_is_out(desk, figures):
+    _desks(desk, "create", "paper")
+
+    proc = run_desk("status", port=desk.port, data_dir=desk.data_dir)
+
+    assert proc.returncode == 0, proc.stderr
+    assert "desk: paper  (also: main)" in proc.stdout
+
+
+# --- 18: comments on a sheet ----------------------------------------------
+
+from conftest import png  # noqa: E402
+
+#: A matplotlib-style SVG: sized in points, drawn in viewBox units.
+PLOT_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" width="460.8pt" height="345.6pt" '
+    'viewBox="0 0 460.8 345.6"><rect width="460.8" height="345.6" fill="{color}"/></svg>'
+)
+
+
+def _comment(desk, op, **params):
+    return desk.post("/api/comments", {"op": op, **params})
+
+
+def _sheet_with_svg(desk, figures, name="fit.svg", color="red"):
+    fig = figures / name
+    fig.write_text(SVG.format(color=color))
+    return fig, desk.publish(fig).json()["sheet"]
+
+
+def test_a_comment_is_pinned_on_the_sheet_and_read_back_in_order(desk, figures):
+    fig, sheet = _sheet_with_svg(desk, figures)
+
+    first = _comment(desk, "add", sheet_id=sheet["id"], anchor={"x": 0.1, "y": 0.2, "w": 0.3, "h": 0.4}, text="axis label is cut off")
+    assert first.status == 200, first.text
+    second = _comment(desk, "add", sheet_id=sheet["id"], anchor={"x": 0.5, "y": 0.5, "w": 0, "h": 0}, text="this point")
+    assert second.status == 200, second.text
+
+    [back] = desk.sheets()
+    assert back["open_comments"] == 2
+    one, two = back["comments"]
+    assert one["text"] == "axis label is cut off"
+    assert one["anchor"] == {"x": 0.1, "y": 0.2, "w": 0.3, "h": 0.4}
+    assert one["number"] == 1 and two["number"] == 2
+    assert two["anchor"] == {"x": 0.5, "y": 0.5, "w": 0, "h": 0}
+    assert one["resolved_at"] is None
+    assert one["id"] != two["id"]
+    assert back["natural_size"] == {"w": 100, "h": 60}
+
+
+def test_a_comment_is_a_record_on_the_sheet_not_layout(desk, figures):
+    fig, sheet = _sheet_with_svg(desk, figures)
+    desk.post("/api/layout", {"op": "place", "sheet_id": sheet["id"], "x": 300, "y": 200})
+    before = desk.state()["layout"]
+
+    _comment(desk, "add", sheet_id=sheet["id"], anchor=None, text="whole sheet is too busy")
+
+    assert desk.state()["layout"] == before
+    index = _json.loads((desk.desk_dir / "sheets.json").read_text())
+    [record] = index["sheets"]
+    [stored] = record["comments"]
+    assert set(stored) == {"id", "version", "anchor", "text", "created_at", "resolved_at"}
+    assert stored["anchor"] is None
+    assert "comments" not in _json.dumps(before)
+
+
+def test_a_comment_is_stamped_with_the_version_current_when_it_was_made(desk, figures):
+    fig, sheet = _sheet_with_svg(desk, figures)
+    fig.write_text(SVG.format(color="blue"))
+    desk.publish(fig)
+
+    _comment(desk, "add", sheet_id=sheet["id"], anchor={"x": 0, "y": 0, "w": 1, "h": 1}, text="on v2")
+    [back] = desk.sheets()
+
+    assert back["version"] == 2
+    assert back["comments"][0]["version"] == 2
+
+
+def test_a_new_version_resolves_nothing_and_the_pin_stays_where_it_was(desk, figures):
+    fig, sheet = _sheet_with_svg(desk, figures)
+    _comment(desk, "add", sheet_id=sheet["id"], anchor={"x": 0.25, "y": 0.25, "w": 0.5, "h": 0.5}, text="centre")
+
+    fig.write_text(SVG.format(color="blue"))
+    with desk.events() as stream:
+        desk.publish(fig)
+        event = stream.await_event("sheet.version")
+
+    [back] = desk.sheets()
+    assert back["version"] == 2
+    assert back["open_comments"] == 1
+    [comment] = back["comments"]
+    assert comment["version"] == 1
+    assert comment["anchor"] == {"x": 0.25, "y": 0.25, "w": 0.5, "h": 0.5}
+    assert event["sheet"]["comments"][0]["version"] == 1
+
+
+def test_comments_survive_trash_and_restore_and_a_restart(desk, figures):
+    fig, sheet = _sheet_with_svg(desk, figures)
+    _comment(desk, "add", sheet_id=sheet["id"], anchor={"x": 0, "y": 0, "w": 0.5, "h": 0.5}, text="keep me")
+    desk.post("/api/trash", {"sheet_id": sheet["id"]})
+
+    assert desk.state()["trash"][0]["open_comments"] == 1
+    desk.post("/api/restore", {"sheet_id": sheet["id"]})
+    desk.restart()
+
+    [back] = desk.sheets()
+    assert [c["text"] for c in back["comments"]] == ["keep me"]
+    assert back["open_comments"] == 1
+
+
+def test_a_comment_outlives_the_eviction_of_the_version_it_was_made_on(desk, figures):
+    fig, sheet = _sheet_with_svg(desk, figures)
+    _comment(desk, "add", sheet_id=sheet["id"], anchor={"x": 0.9, "y": 0.1, "w": 0.1, "h": 0.1}, text="made on v1")
+
+    for i in range(21):
+        fig.write_text(SVG.format(color=f"#{i:06x}"))
+        desk.publish(fig)
+
+    [back] = desk.sheets()
+    assert 1 not in back["versions"]
+    [comment] = back["comments"]
+    assert comment["version"] == 1
+    assert comment["natural_size"] is None, "the version is gone, so there is nothing to measure"
+    assert back["natural_size"] == {"w": 100, "h": 60}
+
+
+def test_resolving_keeps_the_comment_and_removing_drops_it(desk, figures):
+    fig, sheet = _sheet_with_svg(desk, figures)
+    a = _comment(desk, "add", sheet_id=sheet["id"], anchor=None, text="a").json()["sheet"]["comments"][0]["id"]
+    b = _comment(desk, "add", sheet_id=sheet["id"], anchor=None, text="b").json()["sheet"]["comments"][1]["id"]
+
+    resolved = _comment(desk, "resolve", sheet_id=sheet["id"], comment_id=a)
+    assert resolved.status == 200, resolved.text
+    [back] = desk.sheets()
+    assert back["open_comments"] == 1
+    assert back["comments"][0]["resolved_at"] is not None
+    assert back["comments"][1]["resolved_at"] is None
+    # Resolving again is harmless: the comment stays resolved.
+    assert _comment(desk, "resolve", sheet_id=sheet["id"], comment_id=a).status == 200
+
+    removed = _comment(desk, "remove", sheet_id=sheet["id"], comment_id=b)
+    assert removed.status == 200, removed.text
+    [back] = desk.sheets()
+    assert [c["id"] for c in back["comments"]] == [a]
+    assert back["open_comments"] == 0
+
+
+def test_a_comment_with_no_anchor_is_about_the_whole_sheet(desk, figures):
+    fig, sheet = _sheet_with_svg(desk, figures)
+
+    resp = _comment(desk, "add", sheet_id=sheet["id"], text="needs a title")
+
+    assert resp.status == 200, resp.text
+    [comment] = resp.json()["sheet"]["comments"]
+    assert comment["anchor"] is None
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"sheet_id": "ghost", "anchor": None, "text": "hi"},
+        {"sheet_id": None, "anchor": None, "text": "hi"},
+        {"sheet_id": 7, "anchor": None, "text": "hi"},
+        {"anchor": None, "text": ""},
+        {"anchor": None, "text": "   "},
+        {"anchor": None, "text": 5},
+        {"anchor": None},
+        {"anchor": {"x": 1.2, "y": 0, "w": 0, "h": 0}, "text": "out"},
+        {"anchor": {"x": -0.1, "y": 0, "w": 0, "h": 0}, "text": "out"},
+        {"anchor": {"x": 0.8, "y": 0, "w": 0.5, "h": 0}, "text": "leaves the box"},
+        {"anchor": {"x": 0, "y": 0.8, "w": 0, "h": 0.5}, "text": "leaves the box"},
+        {"anchor": {"x": "left", "y": 0, "w": 0, "h": 0}, "text": "not a number"},
+        {"anchor": {"x": 0, "y": 0, "w": 0}, "text": "missing h"},
+        {"anchor": [0, 0, 1, 1], "text": "not an object"},
+    ],
+)
+def test_a_comment_the_desk_cannot_make_is_refused_with_400(desk, figures, body):
+    fig, sheet = _sheet_with_svg(desk, figures)
+    body = {"op": "add", "sheet_id": sheet["id"], **body}
+
+    resp = desk.post("/api/comments", body)
+
+    assert resp.status == 400, resp.text
+    assert resp.json()["error"]
+    assert desk.sheets()[0]["comments"] == []
+
+
+def test_resolving_or_removing_a_comment_that_is_not_there_is_400(desk, figures):
+    fig, sheet = _sheet_with_svg(desk, figures)
+
+    for op in ("resolve", "remove"):
+        resp = _comment(desk, op, sheet_id=sheet["id"], comment_id="nope")
+        assert resp.status == 400, resp.text
+        assert "nope" in resp.json()["error"]
+    assert _comment(desk, "resolve", sheet_id="ghost", comment_id="nope").status == 400
+    assert _comment(desk, "levitate", sheet_id=sheet["id"]).status == 400
+
+
+def test_an_anchor_on_an_iframe_kind_is_refused_but_a_sheet_level_comment_is_not(desk, figures):
+    files = {"a.html": b"<p>hi</p>", "b.md": b"# hi\n", "c.pdf": b"%PDF-1.4\n%fake\n"}
+    for name, data in files.items():
+        (figures / name).write_bytes(data)
+        sheet = desk.publish(figures / name).json()["sheet"]
+        assert sheet["natural_size"] is None, name
+
+        refused = _comment(desk, "add", sheet_id=sheet["id"], anchor={"x": 0, "y": 0, "w": 0, "h": 0}, text="here")
+        assert refused.status == 400, name
+        assert "sheet-level" in refused.json()["error"]
+
+        allowed = _comment(desk, "add", sheet_id=sheet["id"], anchor=None, text="everywhere")
+        assert allowed.status == 200, name
+        assert allowed.json()["sheet"]["open_comments"] == 1
+
+
+def test_a_comment_on_a_trashed_sheet_is_refused(desk, figures):
+    fig, sheet = _sheet_with_svg(desk, figures)
+    desk.post("/api/trash", {"sheet_id": sheet["id"]})
+
+    resp = _comment(desk, "add", sheet_id=sheet["id"], anchor=None, text="too late")
+
+    assert resp.status == 400
+    assert "trash" in resp.json()["error"]
+
+
+def test_a_comment_can_be_made_on_a_sent_sheet_and_stays_here(desk):
+    sent = desk.send("alice-mac", ALICE_PATH, SVG.format(color="red").encode()).json()["sheet"]
+
+    resp = _comment(desk, "add", sheet_id=sent["id"], anchor={"x": 0, "y": 0, "w": 0.5, "h": 0.5}, text="for alice")
+    assert resp.status == 200, resp.text
+
+    again = desk.send("alice-mac", ALICE_PATH, SVG.format(color="blue").encode()).json()["sheet"]
+    assert again["version"] == 2
+    assert [c["text"] for c in again["comments"]] == ["for alice"]
+    assert again["origin"] == "alice-mac"
+
+
+def test_one_file_on_two_desks_has_two_independent_comment_sets(desk, figures):
+    fig, on_main = _sheet_with_svg(desk, figures)
+    _comment(desk, "add", sheet_id=on_main["id"], anchor=None, text="on main")
+    _desks(desk, "create", "paper")
+    on_paper = desk.publish(fig).json()["sheet"]
+
+    assert on_paper["comments"] == []
+    _comment(desk, "add", sheet_id=on_paper["id"], anchor=None, text="on paper")
+
+    assert [c["text"] for c in desk.sheets()[0]["comments"]] == ["on paper"]
+    _desks(desk, "switch", "main")
+    assert [c["text"] for c in desk.sheets()[0]["comments"]] == ["on main"]
+
+
+def test_a_damaged_comment_is_dropped_on_load_and_the_rest_survive(desk, figures):
+    fig, sheet = _sheet_with_svg(desk, figures)
+    _comment(desk, "add", sheet_id=sheet["id"], anchor=None, text="fine")
+    desk.stop()
+    index_path = desk.desk_dir / "sheets.json"
+    index = _json.loads(index_path.read_text())
+    index["sheets"][0]["comments"] += [
+        "not a record",
+        {"id": "x"},
+        {"id": "y", "version": "one", "anchor": None, "text": "bad version", "created_at": 1, "resolved_at": None},
+        {"id": "z", "version": 1, "anchor": {"x": 2, "y": 0, "w": 0, "h": 0}, "text": "bad anchor", "created_at": 1, "resolved_at": None},
+        {"id": "w", "version": 1, "anchor": None, "text": "", "created_at": 1, "resolved_at": None},
+    ]
+    index_path.write_text(_json.dumps(index))
+    desk.start()
+
+    [back] = desk.sheets()
+    assert [c["text"] for c in back["comments"]] == ["fine"]
+    assert desk.publish(fig).status == 200
+
+    desk.stop()
+    index = _json.loads(index_path.read_text())
+    index["sheets"][0]["comments"] = "nonsense"
+    index_path.write_text(_json.dumps(index))
+    desk.start()
+    assert desk.sheets()[0]["comments"] == []
+
+
+def test_every_comment_change_emits_the_sheet_and_no_layout(desk, figures):
+    fig, sheet = _sheet_with_svg(desk, figures)
+    desk.post("/api/layout", {"op": "place", "sheet_id": sheet["id"], "x": 300, "y": 400})
+
+    with desk.events() as stream:
+        cid = _comment(desk, "add", sheet_id=sheet["id"], anchor=None, text="one").json()["sheet"]["comments"][0]["id"]
+        added = stream.await_event("sheet.changed")
+        _comment(desk, "resolve", sheet_id=sheet["id"], comment_id=cid)
+        resolved = stream.await_event("sheet.changed")
+        _comment(desk, "remove", sheet_id=sheet["id"], comment_id=cid)
+        removed = stream.await_event("sheet.changed")
+
+    assert added["sheet"]["open_comments"] == 1
+    assert resolved["sheet"]["open_comments"] == 0
+    assert resolved["sheet"]["comments"][0]["resolved_at"] is not None
+    assert removed["sheet"]["comments"] == []
+    for event in (added, resolved, removed):
+        assert "layout" not in event
+        assert event["sheet"]["id"] == sheet["id"]
+    after = desk.state()["layout"]["sheets"][sheet["id"]]
+    assert (after["x"], after["y"]) == (300, 400)
+
+
+def test_the_natural_size_comes_from_the_stored_bytes(desk, figures):
+    raster = figures / "raster.png"
+    raster.write_bytes(png(640, 480))
+    plot = figures / "plot.svg"
+    plot.write_text(PLOT_SVG.format(color="red"))
+    broken = figures / "broken.png"
+    broken.write_bytes(b"\x89PNG\r\n\x1a\n not really")
+
+    sizes = {}
+    for fig in (raster, plot, broken):
+        sizes[fig.name] = desk.publish(fig).json()["sheet"]["natural_size"]
+
+    assert sizes["raster.png"] == {"w": 640, "h": 480}
+    assert sizes["plot.svg"] == {"w": 460.8, "h": 345.6}
+    assert sizes["broken.png"] is None
+
+
+# --- 19: feedback for the agent -------------------------------------------
+
+
+def _feedback(desk, *args, cwd=None):
+    return run_desk("feedback", *args, cwd=cwd, port=desk.port, data_dir=desk.data_dir)
+
+
+def test_desk_feedback_reports_every_open_comment_with_where_it_is(desk, figures):
+    raster = figures / "raster.png"
+    raster.write_bytes(png(640, 480))
+    sid = desk.publish(raster).json()["sheet"]["id"]
+    _comment(desk, "add", sheet_id=sid, anchor={"x": 0.75, "y": 0.1, "w": 0.2, "h": 0.1}, text="the legend covers the data")
+    _comment(desk, "add", sheet_id=sid, anchor={"x": 0.1, "y": 0.5, "w": 0, "h": 0}, text="this outlier\nis it real?")
+    done = _comment(desk, "add", sheet_id=sid, anchor=None, text="done already").json()["sheet"]["comments"][2]["id"]
+    _comment(desk, "resolve", sheet_id=sid, comment_id=done)
+    _comment(desk, "add", sheet_id=sid, anchor=None, text="needs a title")
+    quiet = figures / "quiet.svg"
+    quiet.write_text(SVG.format(color="red"))
+    desk.publish(quiet)
+    binned = figures / "binned.svg"
+    binned.write_text(SVG.format(color="blue"))
+    binned_id = desk.publish(binned).json()["sheet"]["id"]
+    _comment(desk, "add", sheet_id=binned_id, anchor=None, text="in the trash")
+    desk.post("/api/trash", {"sheet_id": binned_id})
+
+    proc = _feedback(desk)
+
+    assert proc.returncode == 0, proc.stderr
+    out = proc.stdout
+    assert str(raster) in out
+    assert "v1 · 3 open comments · 640×480 px" in out
+    assert "#1  on v1 — upper right" in out
+    assert "fractions: x 0.750–0.950, y 0.100–0.200" in out
+    assert "pixels on v1: x 480–608, y 48–96 (of 640×480)" in out
+    assert "the legend covers the data" in out
+    assert "#2  on v1 — left edge, middle" in out
+    assert "fractions: x 0.100, y 0.500 (a point)" in out
+    assert "pixels on v1: x 64, y 240 (of 640×480)" in out
+    assert "      this outlier\n      is it real?" in out
+    assert "#4  on v1 — whole sheet" in out
+    assert "needs a title" in out
+    assert "done already" not in out, "resolved comments are not feedback"
+    assert str(quiet) not in out, "a sheet with nothing open is not reported"
+    assert "in the trash" not in out and str(binned) not in out
+
+
+def test_desk_feedback_json_is_the_same_report_as_one_object(desk, figures):
+    raster = figures / "raster.png"
+    raster.write_bytes(png(640, 480))
+    sid = desk.publish(raster).json()["sheet"]["id"]
+    _comment(desk, "add", sheet_id=sid, anchor={"x": 0.5, "y": 0.5, "w": 0.25, "h": 0.25}, text="here")
+    _comment(desk, "add", sheet_id=sid, anchor=None, text="everywhere")
+
+    proc = _feedback(desk, "--json")
+
+    assert proc.returncode == 0, proc.stderr
+    report = _json.loads(proc.stdout)
+    assert report["desk"] == "main"
+    [sheet] = report["sheets"]
+    assert sheet["source_path"] == str(raster)
+    assert sheet["origin"] is None
+    assert sheet["version"] == 1
+    assert sheet["natural_size"] == {"w": 640, "h": 480}
+    here, everywhere = sheet["comments"]
+    assert set(here) >= {"id", "version", "anchor", "pixels", "location", "text"}
+    assert here["anchor"] == {"x": 0.5, "y": 0.5, "w": 0.25, "h": 0.25}
+    assert here["pixels"] == {"x": 320, "y": 240, "w": 160, "h": 120}
+    assert here["location"] == "centre"
+    assert here["text"] == "here"
+    assert everywhere["anchor"] is None
+    assert everywhere["pixels"] is None
+    assert everywhere["location"] == "whole sheet"
+
+
+def test_desk_feedback_converts_svg_fractions_against_the_viewbox(desk, figures):
+    plot = figures / "plot.svg"
+    plot.write_text(PLOT_SVG.format(color="red"))
+    sid = desk.publish(plot).json()["sheet"]["id"]
+    _comment(desk, "add", sheet_id=sid, anchor={"x": 0.5, "y": 0.25, "w": 0.25, "h": 0.5}, text="x axis")
+
+    proc = _feedback(desk, str(plot), "--json")
+
+    assert proc.returncode == 0, proc.stderr
+    [sheet] = _json.loads(proc.stdout)["sheets"]
+    assert sheet["natural_size"] == {"w": 460.8, "h": 345.6}
+    assert sheet["comments"][0]["pixels"] == {"x": 230, "y": 86, "w": 115, "h": 173}
+    text = _feedback(desk, str(plot)).stdout
+    assert "460.8×345.6 px" in text
+    assert "pixels on v1: x 230–346, y 86–259" in text
+
+
+def test_desk_feedback_gives_pixels_against_the_commented_version_while_it_is_retained(desk, figures):
+    raster = figures / "raster.png"
+    raster.write_bytes(png(100, 100))
+    sid = desk.publish(raster).json()["sheet"]["id"]
+    _comment(desk, "add", sheet_id=sid, anchor={"x": 0.5, "y": 0.5, "w": 0.5, "h": 0.5}, text="corner")
+    raster.write_bytes(png(200, 300))
+    desk.publish(raster)
+
+    proc = _feedback(desk, "--json")
+    [sheet] = _json.loads(proc.stdout)["sheets"]
+    [comment] = sheet["comments"]
+
+    assert sheet["version"] == 2
+    assert comment["version"] == 1
+    assert comment["retained"] is True
+    assert comment["pixels"] == {"x": 100, "y": 150, "w": 100, "h": 150}
+    assert comment["pixels_on_version"] == {"x": 50, "y": 50, "w": 50, "h": 50}
+    text = _feedback(desk).stdout
+    assert "#1  on v1 — lower right" in text
+    assert "pixels on v2: x 100–200, y 150–300 (of 200×300)" in text
+    assert "pixels on v1: x 50–100, y 50–100" in text
+
+
+def test_desk_feedback_says_when_the_commented_version_is_no_longer_retained(desk, figures):
+    raster = figures / "raster.png"
+    raster.write_bytes(png(100, 100))
+    sid = desk.publish(raster).json()["sheet"]["id"]
+    _comment(desk, "add", sheet_id=sid, anchor={"x": 0, "y": 0, "w": 0.5, "h": 0.5}, text="early")
+    for i in range(21):
+        raster.write_bytes(png(200, 200) + bytes([i]))
+        desk.publish(raster)
+
+    proc = _feedback(desk)
+
+    assert proc.returncode == 0, proc.stderr
+    assert "#1  on v1, no longer retained — upper left" in proc.stdout
+    assert "pixels on v22: x 0–100, y 0–100 (of 200×200)" in proc.stdout
+    assert "pixels on v1" not in proc.stdout
+    [sheet] = _json.loads(_feedback(desk, "--json").stdout)["sheets"]
+    assert sheet["comments"][0]["retained"] is False
+    assert sheet["comments"][0]["pixels_on_version"] is None
+
+
+def test_desk_feedback_still_reports_fractions_when_the_size_cannot_be_read(desk, figures):
+    broken = figures / "broken.png"
+    broken.write_bytes(b"\x89PNG\r\n\x1a\n not really a png")
+    sid = desk.publish(broken).json()["sheet"]["id"]
+    _comment(desk, "add", sheet_id=sid, anchor={"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.2}, text="blurry")
+    notes = figures / "notes.md"
+    notes.write_text("# hi\n")
+    nid = desk.publish(notes).json()["sheet"]["id"]
+    _comment(desk, "add", sheet_id=nid, anchor=None, text="shorter")
+
+    proc = _feedback(desk)
+
+    assert proc.returncode == 0, proc.stderr
+    assert "natural size not available" in proc.stdout
+    assert "fractions: x 0.100–0.300, y 0.100–0.300" in proc.stdout
+    assert "pixels: not available — the desk could not read a width and height from this .png" in proc.stdout
+    assert "#1  on v1 — whole sheet" in proc.stdout and "shorter" in proc.stdout
+
+
+def test_desk_feedback_names_the_origin_of_a_sent_sheet(desk):
+    sent = desk.send("alice-mac", ALICE_PATH, SVG.format(color="red").encode()).json()["sheet"]
+    _comment(desk, "add", sheet_id=sent["id"], anchor={"x": 0.9, "y": 0.9, "w": 0.1, "h": 0.1}, text="for alice")
+
+    proc = _feedback(desk)
+
+    assert proc.returncode == 0, proc.stderr
+    assert ALICE_PATH in proc.stdout
+    assert "from alice-mac — a copy" in proc.stdout
+    assert "pixels on v1: x 90–100, y 54–60" in proc.stdout
+    [sheet] = _json.loads(_feedback(desk, ALICE_PATH, "--json").stdout)["sheets"]
+    assert sheet["origin"] == "alice-mac"
+
+
+def test_desk_feedback_with_a_path_resolves_it_the_way_present_does(desk, figures):
+    fig = figures / "fit.svg"
+    fig.write_text(SVG.format(color="red"))
+    sid = desk.publish(fig).json()["sheet"]["id"]
+    _comment(desk, "add", sheet_id=sid, anchor=None, text="only this one")
+    other = figures / "other.svg"
+    other.write_text(SVG.format(color="blue"))
+    oid = desk.publish(other).json()["sheet"]["id"]
+    _comment(desk, "add", sheet_id=oid, anchor=None, text="not this one")
+
+    proc = _feedback(desk, "fit.svg", cwd=figures)
+
+    assert proc.returncode == 0, proc.stderr
+    assert "only this one" in proc.stdout
+    assert "not this one" not in proc.stdout
+
+
+def test_desk_feedback_with_nothing_open_says_so_and_exits_zero(desk, figures):
+    fig = figures / "fit.svg"
+    fig.write_text(SVG.format(color="red"))
+    sid = desk.publish(fig).json()["sheet"]["id"]
+
+    proc = _feedback(desk)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == "no open feedback"
+
+    cid = _comment(desk, "add", sheet_id=sid, anchor=None, text="x").json()["sheet"]["comments"][0]["id"]
+    _comment(desk, "resolve", sheet_id=sid, comment_id=cid)
+    proc = _feedback(desk, str(fig))
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == "no open feedback"
+    assert _json.loads(_feedback(desk, "--json").stdout)["sheets"] == []
+
+
+def test_desk_feedback_for_a_path_that_is_not_a_sheet_exits_nonzero(desk, figures):
+    fig = figures / "fit.svg"
+    fig.write_text(SVG.format(color="red"))
+
+    proc = _feedback(desk, str(fig))
+
+    assert proc.returncode != 0
+    assert "is not a sheet on the desk" in proc.stderr
+    assert str(fig) in proc.stderr
+
+
+def test_desk_feedback_never_starts_the_server(free_port, tmp_path):
+    proc = run_desk(
+        "feedback", port=free_port, data_dir=tmp_path / "never",
+        env={"DESK_LOG_DIR": str(tmp_path / "logs")},
+    )
+
+    assert proc.returncode != 0
+    assert "not running" in proc.stderr
+    assert "starting the server" not in proc.stderr
+    assert _closed(free_port)
+    assert not (tmp_path / "never").exists()
+
+
+def test_desk_present_says_when_the_sheet_it_presented_has_open_comments(desk, figures):
+    fig = figures / "fit.svg"
+    fig.write_text(SVG.format(color="red"))
+    sid = desk.publish(fig).json()["sheet"]["id"]
+
+    quiet = run_desk("present", str(fig), port=desk.port, data_dir=desk.data_dir)
+    assert quiet.returncode == 0, quiet.stderr
+    assert "open comment" not in quiet.stdout
+    assert len(quiet.stdout.strip().splitlines()) == 2
+
+    _comment(desk, "add", sheet_id=sid, anchor=None, text="one")
+    _comment(desk, "add", sheet_id=sid, anchor={"x": 0, "y": 0, "w": 0, "h": 0}, text="two")
+    loud = run_desk("present", str(fig), port=desk.port, data_dir=desk.data_dir)
+
+    assert loud.returncode == 0, loud.stderr
+    lines = loud.stdout.strip().splitlines()
+    assert len(lines) == 3
+    assert lines[2] == f"2 open comments on this sheet — run: desk feedback {fig}"
+
+
+def test_desk_present_to_never_mentions_the_recipients_comments(desk, figures, free_port):
+    fig = figures / "fit.svg"
+    fig.write_text(SVG.format(color="red"))
+    first = run_desk("present", str(fig), "--to", f"127.0.0.1:{desk.port}", port=free_port, env=NO_TAILSCALE)
+    assert first.returncode == 0, first.stderr
+    [sheet] = desk.sheets()
+    _comment(desk, "add", sheet_id=sheet["id"], anchor=None, text="theirs, not the sender's")
+
+    again = run_desk("present", str(fig), "--to", f"127.0.0.1:{desk.port}", port=free_port, env=NO_TAILSCALE)
+
+    assert again.returncode == 0, again.stderr
+    assert "open comment" not in again.stdout
+    assert len(again.stdout.strip().splitlines()) == 2

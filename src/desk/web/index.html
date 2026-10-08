@@ -38,9 +38,13 @@
 </aside>
 
 <div id="hud">
+  <select id="desk-switch" title="Which desk is out"></select>
+  <button id="btn-new-desk" title="Start another desk">+ desk</button>
+  <button id="btn-remove-desk" title="Take this desk away (only when it is empty)">remove</button>
   <button id="btn-home" title="Home (0)">home</button>
   <button id="btn-overview" title="Overview — fit everything (f)">overview</button>
   <button id="btn-trash" title="Trash">trash <span id="trash-count" class="pill">0</span></button>
+  <button id="btn-clear" title="Clear the desk — every sheet to the trash">clear</button>
   <button id="btn-skin" title="Change the look (t)">day</button>
   <span id="zoom-readout">100%</span>
 </div>
@@ -57,11 +61,28 @@
 </section>
 
 <div id="fullscreen" hidden>
-  <div id="fullscreen-stage"><div id="fullscreen-holder"></div></div>
+  <!-- The pins layer lives inside the holder, so it pans and zooms with the
+       figure; each pin counter-scales itself so it stays small at any zoom. -->
+  <div id="fullscreen-stage"><div id="fullscreen-holder"><div id="fullscreen-pins"></div></div></div>
   <div id="fullscreen-bar">
     <span id="fullscreen-name"></span>
+    <span id="fullscreen-pins-sheet" title="Comments on the whole sheet"></span>
+    <button id="fullscreen-comment" title="Comment (c)">comment</button>
     <button id="fullscreen-reset" title="Fit">fit</button>
     <button id="fullscreen-close" title="Close (Esc)">close ×</button>
+  </div>
+  <div id="comment-hint" hidden>drag a rectangle or click a point — Enter for the whole sheet, Esc to cancel</div>
+  <div id="comment-editor" hidden>
+    <textarea id="comment-text" rows="3" placeholder="What should change here?"></textarea>
+    <div class="hint">Enter saves · Shift-Enter for a new line · Esc cancels</div>
+  </div>
+  <div id="comment-popover" hidden>
+    <div id="comment-popover-head"></div>
+    <div id="comment-popover-text"></div>
+    <div class="comment-actions">
+      <button id="comment-resolve" title="Done: the comment stays on the sheet as resolved">resolve</button>
+      <button id="comment-remove" title="Take the comment off the sheet">remove</button>
+    </div>
   </div>
 </div>
 

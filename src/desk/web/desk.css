@@ -95,6 +95,16 @@
   --accent: #ffd88a;
   --danger: #e2564a;
 
+  /* A comment's pin on the figure, and its count on the paper margin. One
+     colour that is neither the figure's nor the desk's, so it reads as a
+     mark somebody made rather than as part of the plot. */
+  --pin: #c2255c;
+  --pin-ink: #ffffff;
+  --pin-hollow: rgba(255, 255, 255, .88);
+  --pin-halo: rgba(255, 255, 255, .75);
+  --comment-badge: #c2255c;
+  --comment-badge-ink: #ffffff;
+
   --radius: 2px;
 
   /* Three static layers. The first is contact darkening — the single most
@@ -130,7 +140,8 @@ html, body {
   border: 0;
 }
 
-button {
+button,
+#hud select {
   font: inherit;
   color: var(--brass-ink);
   background: linear-gradient(var(--brass), var(--brass-lo));
@@ -140,7 +151,9 @@ button {
   cursor: pointer;
   text-shadow: 0 1px 0 rgba(255, 255, 255, .28);
 }
-button:hover { background: linear-gradient(#f0d79b, #c5a055); }
+button:hover, #hud select:hover { background: linear-gradient(#f0d79b, #c5a055); }
+#hud select { max-width: 140px; font-weight: 600; }
+#btn-remove-desk[disabled] { opacity: .45; cursor: not-allowed; }
 button:active { transform: translateY(1px); }
 
 .pill {
@@ -278,6 +291,25 @@ body.zoomed-in #grain { opacity: 0; }
   text-overflow: ellipsis;
 }
 .sheet-version { font-size: 10px; color: #a9a29a; }
+/* A sheet sent from another machine says so, in the same quiet grey as its
+   version: it is information, not an alarm. */
+.sheet-origin { flex: 0 0 auto; font-size: 10px; font-style: italic; color: #a9a29a; white-space: nowrap; }
+.sheet-origin[hidden] { display: none; }
+/* How many comments are still open. On the margin, in the chrome's flow, so
+   it can never sit over the figure. */
+.sheet-comments {
+  flex: 0 0 auto;
+  min-width: 16px;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: var(--comment-badge);
+  color: var(--comment-badge-ink);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 15px;
+  text-align: center;
+}
+.sheet-comments[hidden] { display: none; }
 
 .sheet-grow,
 .sheet-trash {
@@ -509,6 +541,16 @@ body.dragging .pile .sheet-shield { display: block; }
   padding: 4px 4px 2px;
   font-size: 10px;
   color: var(--paper-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.inbox-item .from {
+  display: block;
+  padding: 0 4px 3px;
+  font-size: 9px;
+  font-style: italic;
+  color: #a9a29a;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -847,6 +889,9 @@ body.stale #mug-body { animation: mug-alarm 3s ease-in-out infinite; }
   top: 0;
   left: 0;
   transform-origin: 0 0;
+  /* Overwritten inline by desk.js with 1/scale on every zoom; the pins read
+     it by inheritance, so it must be set here and never on the layer. */
+  --pin-scale: 1;
   background: var(--paper);
   box-shadow: 0 2px 3px rgba(0, 0, 0, .5), 0 44px 84px -22px rgba(0, 0, 0, .8);
 }
@@ -873,3 +918,128 @@ body.stale #mug-body { animation: mug-alarm 3s ease-in-out infinite; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* --- comments: pins over the figure ----------------------------------- */
+
+/* The one accepted exception to "nothing paints over a figure". The layer
+   lives inside the scaled holder, so a pin's position is a plain percentage
+   of the figure; each pin then undoes the holder's scale on itself, so the
+   mark stays the same few pixels at any zoom. Nothing here is animated. */
+#fullscreen-pins {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+#fullscreen.commenting #fullscreen-pins { pointer-events: auto; cursor: crosshair; }
+#fullscreen.commenting #fullscreen-stage { cursor: crosshair; }
+
+.pin { position: absolute; pointer-events: none; }
+/* A thin outline for a rectangle, with a pale halo so it shows on a dark
+   figure as well as a white one. Both widths are scaled back to 1px. */
+.pin.rect {
+  border: calc(1.5px * var(--pin-scale)) solid var(--pin);
+  border-radius: calc(2px * var(--pin-scale));
+  box-shadow: 0 0 0 calc(1px * var(--pin-scale)) var(--pin-halo);
+}
+.pin.hollow.rect { border-style: dashed; }
+.pin.pending.rect { border-style: dashed; box-shadow: none; }
+
+/* The numbered circle, at the rectangle's top-left corner or on the point. */
+.pin-label {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform: translate(-50%, -50%) scale(var(--pin-scale));
+  transform-origin: center;
+  pointer-events: auto;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border: 1.5px solid var(--pin-ink);
+  border-radius: 10px;
+  background: var(--pin);
+  color: var(--pin-ink);
+  font: 600 11px/17px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  text-align: center;
+  white-space: nowrap;
+  text-shadow: none;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .45);
+  cursor: pointer;
+}
+.pin-label:hover { background: var(--pin); filter: brightness(1.15); }
+.pin-label:active { transform: translate(-50%, -50%) scale(var(--pin-scale)); }
+/* A pin made on an older version is hollow and says which. */
+.pin.hollow .pin-label,
+.pin-label.hollow {
+  background: var(--pin-hollow);
+  color: var(--pin);
+  border-color: var(--pin);
+}
+.pin.pending .pin-label { display: none; }
+.pin.pending.point::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: calc(10px * var(--pin-scale));
+  height: calc(10px * var(--pin-scale));
+  margin: calc(-5px * var(--pin-scale)) 0 0 calc(-5px * var(--pin-scale));
+  border: calc(1.5px * var(--pin-scale)) solid var(--pin);
+  border-radius: 50%;
+  background: var(--pin-halo);
+}
+
+/* Comments on the whole sheet line up in the bar instead. */
+#fullscreen-pins-sheet { display: flex; gap: 4px; }
+#fullscreen-pins-sheet:empty { display: none; }
+#fullscreen-pins-sheet .pin-label { position: static; transform: none; }
+#fullscreen-pins-sheet .pin-label:active { transform: translateY(1px); }
+#fullscreen-comment.armed { box-shadow: 0 0 0 2px var(--accent); }
+
+#comment-hint {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 6px 12px;
+  border-radius: 5px;
+  background: linear-gradient(var(--leather), var(--leather-lo));
+  border: 1px solid rgba(0, 0, 0, .5);
+  color: var(--ink);
+  font-size: 12px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+#comment-hint[hidden] { display: none; }
+
+/* The editor and the popover are screen-fixed: they sit beside a spot on the
+   figure but never scale with it. */
+#comment-editor,
+#comment-popover {
+  position: absolute;
+  z-index: 120;
+  width: 280px;
+  padding: 8px;
+  background: linear-gradient(var(--leather), var(--leather-lo));
+  border: 1px solid rgba(0, 0, 0, .5);
+  border-radius: 5px;
+  box-shadow: inset 0 1px 0 var(--leather-edge), 0 12px 30px rgba(0, 0, 0, .6);
+}
+#comment-editor[hidden],
+#comment-popover[hidden] { display: none; }
+#comment-editor textarea {
+  display: block;
+  width: 100%;
+  min-height: 60px;
+  resize: vertical;
+  padding: 6px 8px;
+  font: inherit;
+  color: #2b2721;
+  background: var(--paper);
+  border: 1px solid var(--paper-edge);
+  border-radius: 3px;
+}
+#comment-editor .hint { padding: 6px 0 0; }
+#comment-popover-head { font-size: 11px; color: var(--brass); letter-spacing: .04em; }
+#comment-popover-text { margin: 6px 0 8px; color: var(--ink); white-space: pre-wrap; word-break: break-word; }
+.comment-actions { display: flex; gap: 6px; justify-content: flex-end; }

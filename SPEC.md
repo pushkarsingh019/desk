@@ -53,7 +53,7 @@ agent iterates.
 5. As a scientist, I want PNG figures to render, so that raster output from libraries that can't emit vector works too.
 6. As a scientist, I want self-contained HTML plots (plotly, bokeh, altair) to render and stay interactive, so that anything I can't view natively still has a path onto the desk.
 7. As a scientist, I want markdown files to render as sheets, so that a written summary can sit next to the figure it describes.
-8. As a scientist, I want a single desk shared across all my work, so that there is one URL and one place to look.
+8. As a scientist, I want one page at one URL for all my work, so that there is one place to look — even once that page can show more than one desk (story 42).
 9. As a scientist, I want the desk to be a bounded pannable, zoomable slab with visible edges, so that it reads as a real desk seen from above and its edges give me a landmark to navigate by.
 10. As a scientist, I want a key that snaps the view back home, so that I can always recover my bearings after panning away.
 11. As a scientist, I want a zoomed-out overview, so that I can find something I placed a while ago.
@@ -70,6 +70,7 @@ agent iterates.
 22. As a scientist, I want to throw a sheet away, so that the desk doesn't accumulate junk forever.
 23. As a scientist, I want a thrown-away sheet to NOT come back when the script that made it re-runs, so that discarding actually means something.
 24. As a scientist, I want a trash corner I can restore from, so that discarding is recoverable when I change my mind.
+24a. As a scientist, I want to clear the whole desk in one action, so that starting fresh does not mean trashing sheets one at a time.
 25. As a scientist, I want re-presenting the same file path to update the existing sheet rather than create a second one, so that the desk doesn't fill with near-identical copies.
 26. As a scientist, I want a sheet to update automatically when its source file changes on disk, so that re-running a plotting script requires no second command.
 27. As a scientist, I want an updating sheet to keep its exact position and size, so that I can stare at one spot while the agent iterates.
@@ -86,6 +87,10 @@ agent iterates.
 38. As a scientist, I want `/desk` to be user-invoked only, so that the model never puts things on my desk on its own initiative.
 39. As an agent, I want presenting a figure to be a single command with an optional path, so that I get it right on the first attempt without flag soup.
 40. As a scientist, I want the browser to reconnect on its own if the server restarts, so that a stale tab doesn't silently stop updating.
+41. As a scientist, I want to put a figure on a labmate's desk with `/desk path/to/fig.svg --to <their machine>`, so that showing someone a result is one command instead of a file transfer and a message.
+42. As a scientist, I want more than one desk — one per paper, say — and to switch between them on the page, so that `/desk` lands on whichever desk I have out and the others keep their layouts untouched.
+43. As a scientist, I want to pin a comment on a figure — on a region, a point, or the whole sheet — and see it stay there through new versions until I resolve it, so that what I think is wrong with a plot is recorded where it is wrong, not in a chat I will scroll away from.
+44. As a scientist, I want to type `/desk feedback` and have the agent read my comments back — where each one is, in terms it can act on — fix the plotting code, and re-run it so the sheet updates under my comments, so that critiquing a figure is pointing at it rather than describing it, and the fix lands where I am already looking.
 
 ## Implementation Decisions
 
@@ -119,8 +124,9 @@ dropped: it existed only for iPad Safari, mobile is out of scope, and the
 **Modules.**
 
 - *Store* — owns the content store and sheet records. Publishing copies the file
-  in (never references it in place) and appends a version. Owns trash and
-  tombstones. Retains the last 20 versions per sheet; no UI exposes them yet.
+  in (never references it in place) and appends a version. Owns trash,
+  tombstones, and the comments on a sheet. Retains the last 20 versions per
+  sheet; no UI exposes them yet.
 - *Layout* — owns desk state: position, size, z-order, pile membership, inbox
   membership, home viewport. Pure state transitions, persisted as JSON.
 - *Watcher* — watches source paths that have been published at least once,
@@ -143,6 +149,82 @@ rather than something to defend against.
 **Publishing is idempotent on path.** Known path → new version on the existing
 sheet, position and size untouched. Unknown path → new sheet, placed in the
 inbox, never auto-placed on the desk.
+
+**Sending to another desk.** `/desk <path> --to <machine>` puts a figure on
+someone else's desk. The `desk` command reads the file and hands its bytes to
+the desk on that machine over the same publish endpoint; nothing is started or
+published locally, and if their desk cannot be reached the command fails
+loudly. The sheet lands in the recipient's inbox with an *origin* — the
+sending machine's tailnet name — and its identity is the origin plus the
+sender's absolute path, so sending the same file again updates that sheet in
+place while the same path from two machines stays two sheets. A sent sheet is
+never watched: the file it came from is on another disk, and a file at the
+same path on the recipient's machine is a different file. A relay that
+forwarded every new version from the sender's desk was designed and cut for
+v1: it needs a registry of remote subscriptions, fails silently in the
+background, and would resurrect a sheet the recipient had thrown away every
+time the sender's script re-ran. Sending again is a deliberate act, and that
+is what clears the tombstone. The perimeter is unchanged — the bind address,
+no tokens — which now means a tailnet peer can put bytes on the desk, not only
+name a file already on it. That is the feature, and it is why a desk bound to
+localhost cannot receive.
+
+**Several desks, one current.** Desks are named and live one directory each
+under `<data>/desks/`; the directory listing is the registry, and
+`current.json` names the one that is out. The page shows the current desk
+and has a switcher; a `/desk`, a send, and a restore all land on the current
+desk, because the command cannot see the page and the user should not have
+to say twice which desk they mean. Sheet identity is per desk, so one file
+can be a sheet on two desks, and every desk's files stay watched whether or
+not it is on screen — a content URL therefore names its desk, since versioned
+URLs are cached forever. Only the current desk's events reach the page; the
+rest is in the state it fetches on switching. An empty desk can be removed;
+the last one cannot. A data directory from before there were desks becomes
+the `main` desk on first start, moved, not copied.
+
+**Comments are records on the sheet, not layout.** A comment is `id`, the
+`version` it was made on, an `anchor`, `text`, `created_at`, and
+`resolved_at`, kept on the sheet record in `sheets.json` — exactly the
+sidecar the "Deferred, not rejected" note below asked the store to leave room
+for, and it needed no migration. The anchor is a rectangle in fractions of
+the content's natural box, a point being a rectangle of zero size and the
+whole sheet being no anchor at all; nothing the browser measured is stored,
+so a pin lands on the same spot of a new version, and a comment made on a
+sheet sent from elsewhere stays here. Iframe kinds take sheet-level comments
+only: an iframe eats pointer events and has no stable natural size. A new
+version resolves nothing — a pin made on an older version is drawn hollow
+with its version number, and when that version is evicted the comment still
+names it. Every add, resolve, and remove emits `sheet.changed` carrying the
+sheet and no layout, so every open page redraws its pins and nothing can
+move. The pins themselves are the one accepted exception to "nothing paints
+over a figure": small numbered circles and a thin outline, in fullscreen
+only. On the desk a sheet shows only a count of its open comments on its
+paper margin. What stayed cut: agent-authored text, replies, freehand (an
+agent cannot read a squiggle), and a version-stepping UI.
+
+**Feedback is read, never pushed.** `desk feedback [path] [--json]` prints
+every open comment on the current desk, or on one sheet, with where each one
+is three ways: a cell of a three-by-three grid in words, the anchor as
+fractions, and the anchor in pixels against the current version — and
+against the version it was made on while that is retained. The pixels come
+from a natural size the server reads from the stored bytes at report time
+(PNG from the IHDR chunk; SVG from `width`/`height` when they are plain
+pixels, otherwise the `viewBox`, which is the coordinate system an agent
+reading the file will find) and carries in the sheet JSON; the command
+measures nothing itself, and when there is no size it gives fractions, says
+why, and still exits 0. It never starts the server. `desk present` says when
+the sheet it just presented has open comments, in a third line that names
+the command to run, and never when sending with `--to`, because comments
+never travel back to the sender. The `/desk` skill is where this becomes a
+loop: on that third line the agent runs `desk feedback` before anything
+else, restates each comment as one concrete change to the plotting code,
+makes it, re-runs the script so the watched sheet updates in place, and
+tells the user to look and resolve what is fixed. A sheet with an origin is
+a copy whose script is elsewhere, so its feedback is reported, not acted on.
+What stayed cut: read-back in the other direction (the agent never learns
+whether the user looked), anything model-invoked, and agent-authored text —
+the agent reads comments and never writes, resolves, removes, or replies to
+one. Layout authority stays the user's; so does the last word on a figure.
 
 **Trash tombstones the path.** A trashed path stops being watched and will not
 be re-created by a subsequent file change. An explicit `/desk` on that path
@@ -250,16 +332,16 @@ Deliberately cut during design, each for a stated reason:
 
 - **Captions, notes, and agent-authored text.** The agent shows a picture; it does not narrate.
 - **Agent-authored clusters or grouping.** Layout is the user's alone.
-- **Multiple desks.** One desk.
+- **Multiple desks** was cut here as "one desk", and reversed on request: story 42. What stays cut is any coupling between desks — no moving a sheet from one to another, no desk-of-desks, no per-desk address for sending.
 - **Mobile and tablet.** Desktop browser only, despite the iPad being on the tailnet.
 - **HTTPS, tokens, passwords, any auth.** Tailscale is the perimeter.
 - **MCP server.** Binds to one client for no gain over a shell command.
 - **Model-invoked presentation.** User types `/desk`; the model never fires it.
-- **Read-back / acknowledgement.** The agent learns nothing about whether the user looked.
-- **Annotation and two-way feedback.** Storage should not preclude it later, but no code now.
+- **Read-back / acknowledgement.** Cut as "the agent learns nothing about whether the user looked", and reversed in one direction only: story 44. The agent can read the user's comments when the user asks it to (`/desk feedback`, or a `desk present` that reports open comments). What stays cut: the agent still learns nothing about whether the user looked, nothing reaches it unasked, and it cannot acknowledge, resolve, or reply.
+- **Annotation and two-way feedback.** Cut as "storage should not preclude it later, but no code now", and reversed once the desk had proved it gets used: story 43. What stays cut is agent-authored text of any kind — the agent never writes, replies to, resolves, or removes a comment — freehand drawing, and painting over a figure, except for the pins themselves.
 - **Directory watching, watch registry, drop directory, inbox flood caps.** All obsoleted by implicit path watching.
 - **Version-stepping UI.** Versions are stored; no interface exposes them until one is actually wanted.
-- **Multi-machine publishing.** Other boxes are compute only; plotting happens on studio.
+- **Cross-machine watching.** A desk watches files on its own disk only. Sending (`--to`) puts a *copy* on another desk, updated when it is sent again and not before; the relay that would forward every version was cut as the zombie the trash exists to prevent. This narrows the original cut of "multi-machine publishing", reversed for one case: one person's figure on another person's desk.
 - **3D and volumetric viewers.**
 
 ## Further Notes
@@ -272,15 +354,20 @@ fine — only the *server* and the *files* must be co-located, not the server an
 the eyes. Consequence: running an agent on another box (coffee, nairlab-server2)
 requires a desk server on that box too. Without one, a sheet publishes once and
 then silently stops updating — a failure mode that is hard to notice, since the
-stale figure still looks like a figure.
+stale figure still looks like a figure. The one way across is `--to`: a copy,
+sent by hand, that says on its face where it came from, so a stale one at
+least looks like what it is.
 
 **Accepted trade-off.** Slash-only invocation means an unattended long-running
 job cannot leave its result on the desk for the user to find later. Nothing
 lands until the user asks. This was chosen deliberately over model invocation.
 
-**Deferred, not rejected.** Two-way annotation — drawing on a figure and having
-the agent read the critique back — was identified during design as the genuinely
-novel part of the idea and the strongest reason this beats `scp`. It is out of
-scope for v1 only because the tool should prove it gets used first. The store
-should keep sheet metadata extensible enough that comments can be added as
-sidecar records later without migration.
+**Deferred, not rejected — and then built.** Two-way annotation — drawing on a
+figure and having the agent read the critique back — was identified during
+design as the genuinely novel part of the idea and the strongest reason this
+beats `scp`. It was out of scope for v1 only because the tool should prove it
+gets used first, and the store was asked to keep sheet metadata extensible
+enough that comments could be added as sidecar records later without
+migration. It did, and they were: comments are records on the sheet (story
+43), added without a migration. "Drawing" became a rectangle or a point, not
+freehand, because an agent can act on a box and cannot act on a squiggle.

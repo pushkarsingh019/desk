@@ -1,12 +1,14 @@
 """The HTTP API — the desk's only seam to the outside world.
 
-Publish, desk state, sheet content, layout transitions, the SSE stream, and the
-static page. Everything a user or an agent can observe passes through here, and
+Publish, desk state, sheet content, layout transitions, comments, the SSE
+stream, and the static page. Everything a user or an agent can observe passes through here, and
 so does every test in `tests/test_api.py`.
 """
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import math
 import os
@@ -20,11 +22,11 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import quote, unquote, urlparse
 
 from desk import layout as layout_model
 from desk import render
-from desk.store import PublishError, Store
+from desk.store import CommentError, PublishError, Store
 from desk.watcher import DEFAULT_DEBOUNCE, DEFAULT_POLL_INTERVAL, Watcher
 
 WEB_ROOT = Path(__file__).resolve().parent / "web"
@@ -88,28 +90,27 @@ class EventBus:
 
 
 class Desk:
-    """Store plus layout plus watcher — the whole server, minus HTTP."""
+    """One desk: its store and its layout, in a directory of its own.
 
-    def __init__(
-        self,
-        data_dir: Path,
-        debounce: float = DEFAULT_DEBOUNCE,
-        poll_interval: float = DEFAULT_POLL_INTERVAL,
-    ):
-        self.data_dir = Path(data_dir)
-        self.data_dir.mkdir(parents=True, exist_ok=True)
-        self.store = Store(self.data_dir)
-        self.layout_path = self.data_dir / "layout.json"
+    A desk knows nothing about the others. It reports what happens on it to
+    `emit`, and `Desks` decides whether the page — which shows exactly one
+    desk — needs to hear about it.
+    """
+
+    def __init__(self, name: str, root: Path, emit):
+        self.name = name
+        self.root = Path(root)
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.store = Store(self.root)
+        self.layout_path = self.root / "layout.json"
         self._layout_lock = threading.RLock()
         self.layout = self._load_layout()
         self._reconcile()
-        self.bus = EventBus()
-        self.watcher = Watcher(
-            self.store.watched_paths,
-            self._on_source_changed,
-            poll_interval=poll_interval,
-            debounce=debounce,
-        )
+        self._emit = emit
+
+    def emit(self, event: dict) -> None:
+        event["desk"] = self.name
+        self._emit(self.name, event)
 
     # -- layout persistence ----------------------------------------------
 
@@ -147,6 +148,11 @@ class Desk:
         sheet = self.store.publish(source_path)
         return self._land(sheet)
 
+    def receive(self, origin, source_path, data: bytes) -> dict:
+        """A file sent from another machine. Lands like any other publish."""
+        sheet = self.store.receive(origin, source_path, data)
+        return self._land(sheet)
+
     def _on_source_changed(self, source_path: str) -> None:
         sheet = self.store.ingest_change(source_path)
         if sheet is not None:
@@ -167,9 +173,9 @@ class Desk:
                 self._save_layout()
         payload = self.sheet_json(sheet)
         if known:
-            self.bus.publish({"type": "sheet.version", "sheet": payload})
+            self.emit({"type": "sheet.version", "sheet": payload})
         else:
-            self.bus.publish(
+            self.emit(
                 {
                     "type": "sheet.created",
                     "sheet": payload,
@@ -188,7 +194,7 @@ class Desk:
         with self._layout_lock:
             self.layout = layout_model.remove_sheet(self.layout, sheet_id)
             self._save_layout()
-        self.bus.publish(
+        self.emit(
             {
                 "type": "sheet.trashed",
                 "sheet_id": sheet_id,
@@ -198,6 +204,25 @@ class Desk:
         )
         return self.sheet_json(sheet)
 
+    def clear(self) -> list[str]:
+        """Throw every live sheet away — desk, inbox, and piles — in one go.
+
+        Each one is tombstoned exactly as if trashed by hand, so the trash can
+        bring any of them back."""
+        trashed = [s["id"] for s in self.store.live_sheets() if self.store.trash(s["id"])]
+        with self._layout_lock:
+            self.layout = layout_model.prune(self.layout, [])
+            self._save_layout()
+        self.emit(
+            {
+                "type": "desk.cleared",
+                "trashed": trashed,
+                "layout": self.layout_json(),
+                "geometry": self.geometry_json(),
+            }
+        )
+        return trashed
+
     def restore(self, sheet_id: str) -> dict | None:
         sheet = self.store.restore(sheet_id)
         if sheet is None:
@@ -206,7 +231,7 @@ class Desk:
             self.layout = layout_model.add_sheet(self.layout, sheet_id)
             self._save_layout()
         payload = self.sheet_json(sheet)
-        self.bus.publish(
+        self.emit(
             {
                 "type": "sheet.restored",
                 "sheet": payload,
@@ -228,22 +253,69 @@ class Desk:
         with self._layout_lock:
             return json.loads(json.dumps(self.layout))
 
+    # -- comments ---------------------------------------------------------
+
+    def comment(self, op, params: dict) -> dict:
+        """Add, resolve, or remove a comment on one sheet.
+
+        A comment is a record on the sheet, not layout: the event that goes
+        out carries the sheet and nothing else, so every open page redraws
+        its pins and nothing on any desk can move.
+        """
+        if op == "add":
+            sheet = self.store.add_comment(
+                params.get("sheet_id"), params.get("anchor"), params.get("text")
+            )
+        elif op == "resolve":
+            sheet = self.store.resolve_comment(params.get("sheet_id"), params.get("comment_id"))
+        elif op == "remove":
+            sheet = self.store.remove_comment(params.get("sheet_id"), params.get("comment_id"))
+        else:
+            raise BadRequest(f"comments needs an op of add, resolve or remove, not {op!r}")
+        payload = self.sheet_json(sheet)
+        self.emit({"type": "sheet.changed", "sheet": payload})
+        return payload
+
     # -- reading ----------------------------------------------------------
 
     def sheet_json(self, sheet: dict) -> dict:
         versions = [v["n"] for v in sheet["versions"]]
         latest = versions[-1] if versions else 0
+        comments = [
+            self.comment_json(sheet, comment, number)
+            for number, comment in enumerate(sheet.get("comments", []), start=1)
+        ]
         return {
             "id": sheet["id"],
             "source_path": sheet["source_path"],
+            "origin": sheet.get("origin"),
             "name": Path(sheet["source_path"]).name,
             "kind": sheet["kind"],
             "version": latest,
             "versions": versions,
-            "content_url": f"/api/content/{sheet['id']}/{latest}",
+            # Names the desk as well as the sheet: sheet ids are per desk, and
+            # a versioned URL is cached forever, so the same path on two desks
+            # must never share one.
+            "content_url": f"/api/content/{quote(self.name, safe='')}/{sheet['id']}/{latest}",
             "created_at": sheet["created_at"],
             "updated_at": sheet["updated_at"],
             "trashed": sheet["trashed"],
+            # The content's natural box, read from the stored bytes, so that
+            # the page and the `desk` command never have to measure anything.
+            "natural_size": self.store.natural_size(sheet["id"]),
+            "comments": comments,
+            "open_comments": sum(1 for c in comments if c["resolved_at"] is None),
+        }
+
+    def comment_json(self, sheet: dict, comment: dict, number: int) -> dict:
+        """One comment as the page and the `desk` command see it: the record,
+        its number (its place among every comment on the sheet, so the pin
+        and the report agree), and the natural box of the version it was
+        made on — None once that version has been evicted."""
+        return {
+            **comment,
+            "number": number,
+            "natural_size": self.store.natural_size(sheet["id"], comment["version"]),
         }
 
     def geometry_json(self) -> dict:
@@ -271,8 +343,10 @@ class Desk:
             "trash": [self.sheet_json(s) for s in self.store.trashed_sheets()],
             "layout": self.layout_json(),
             "geometry": self.geometry_json(),
-            "data_dir": str(self.data_dir),
         }
+
+    def is_empty(self) -> bool:
+        return not self.store.live_sheets()
 
     def content(self, sheet_id: str, version: int | None):
         data, content_type = self.store.content(sheet_id, version)
@@ -286,6 +360,176 @@ class Desk:
                 data = render.unreadable_page("This HTML file is not valid UTF-8", str(exc))
         return data, content_type
 
+
+#: What a desk may be called: something that survives a URL and a directory
+#: name unchanged, so the name on the page is the name on disk.
+DESK_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._ -]{0,39}$")
+DEFAULT_DESK = "main"
+
+
+class Desks:
+    """Every desk this server keeps, and which one is current.
+
+    Exactly one desk is current: it is the one the page shows and the one
+    everything lands on — a `/desk`, a send, a restore. The others are still
+    there, still watched, still updating; switching brings one of them to the
+    front. Desks live under `<data_dir>/desks/<name>/`, one directory each,
+    and the directory listing is the registry.
+    """
+
+    def __init__(
+        self,
+        data_dir: Path,
+        debounce: float = DEFAULT_DEBOUNCE,
+        poll_interval: float = DEFAULT_POLL_INTERVAL,
+    ):
+        self.data_dir = Path(data_dir)
+        self.desks_dir = self.data_dir / "desks"
+        self.current_path = self.data_dir / "current.json"
+        self.desks_dir.mkdir(parents=True, exist_ok=True)
+        self.bus = EventBus()
+        self._lock = threading.RLock()
+        self._migrate_single_desk()
+        self._desks: dict[str, Desk] = {}
+        for entry in sorted(self.desks_dir.iterdir()):
+            if entry.is_dir() and DESK_NAME.match(entry.name):
+                self._desks[entry.name] = Desk(entry.name, entry, self._emit)
+        if not self._desks:
+            self._desks[DEFAULT_DESK] = Desk(DEFAULT_DESK, self.desks_dir / DEFAULT_DESK, self._emit)
+        self.current_name = self._load_current()
+        self.watcher = Watcher(
+            self._watched_paths,
+            self._on_source_changed,
+            poll_interval=poll_interval,
+            debounce=debounce,
+        )
+
+    # -- persistence ------------------------------------------------------
+
+    def _migrate_single_desk(self) -> None:
+        """A data directory from before there were several desks holds one
+        desk at its root. It becomes the `main` desk, moved, not copied, so
+        nothing is ever in two places."""
+        target = self.desks_dir / DEFAULT_DESK
+        for piece in ("sheets.json", "layout.json", "content"):
+            old = self.data_dir / piece
+            if old.exists() and not (target / piece).exists():
+                target.mkdir(parents=True, exist_ok=True)
+                old.rename(target / piece)
+
+    def _load_current(self) -> str:
+        try:
+            name = json.loads(self.current_path.read_text()).get("current")
+        except (OSError, ValueError, AttributeError):
+            name = None
+        if name in self._desks:
+            return name
+        return DEFAULT_DESK if DEFAULT_DESK in self._desks else sorted(self._desks)[0]
+
+    def _save_current(self) -> None:
+        tmp = self.current_path.with_suffix(".json.writing")
+        tmp.write_text(json.dumps({"current": self.current_name}))
+        tmp.replace(self.current_path)
+
+    # -- which desk -------------------------------------------------------
+
+    @property
+    def current(self) -> Desk:
+        with self._lock:
+            return self._desks[self.current_name]
+
+    def names(self) -> list[str]:
+        with self._lock:
+            return sorted(self._desks)
+
+    def get(self, name: str) -> Desk:
+        with self._lock:
+            return self._desks[name]
+
+    def create(self, name) -> dict:
+        """Make a new, empty desk and bring it to the front."""
+        name = _desk_name(name)
+        with self._lock:
+            if name in self._desks:
+                raise BadRequest(f"there is already a desk called {name!r}")
+            self._desks[name] = Desk(name, self.desks_dir / name, self._emit)
+        return self.switch(name)
+
+    def switch(self, name) -> dict:
+        name = _desk_name(name)
+        with self._lock:
+            if name not in self._desks:
+                raise BadRequest(f"there is no desk called {name!r}")
+            self.current_name = name
+            self._save_current()
+        return self._changed()
+
+    def remove(self, name) -> dict:
+        """Take an empty desk away. Its trash goes with it; a desk with
+        anything still on it is refused, and so is the last desk."""
+        name = _desk_name(name)
+        with self._lock:
+            desk = self._desks.get(name)
+            if desk is None:
+                raise BadRequest(f"there is no desk called {name!r}")
+            if not desk.is_empty():
+                raise BadRequest(f"the desk {name!r} still has sheets on it; clear it first")
+            if len(self._desks) == 1:
+                raise BadRequest("that is the only desk; there has to be one")
+            del self._desks[name]
+            shutil.rmtree(desk.root, ignore_errors=True)
+            if self.current_name == name:
+                self.current_name = self._load_current()
+                self._save_current()
+        return self._changed()
+
+    def _changed(self) -> dict:
+        summary = {"desk": self.current_name, "desks": self.names()}
+        self.bus.publish({"type": "desk.changed", **summary})
+        return summary
+
+    # -- events -----------------------------------------------------------
+
+    def _emit(self, desk_name: str, event: dict) -> None:
+        """The page shows the current desk and nothing else, so only that
+        desk's events reach it. Whatever happened elsewhere is in the state
+        the page fetches when it switches there."""
+        if desk_name == self.current_name:
+            self.bus.publish(event)
+
+    # -- watching ---------------------------------------------------------
+
+    def _watched_paths(self) -> list[str]:
+        """Every desk's live paths: a sheet keeps updating whether or not its
+        desk is the one on screen."""
+        with self._lock:
+            desks = list(self._desks.values())
+        paths: set[str] = set()
+        for desk in desks:
+            paths.update(desk.store.watched_paths())
+        return sorted(paths)
+
+    def _on_source_changed(self, source_path: str) -> None:
+        with self._lock:
+            desks = list(self._desks.values())
+        for desk in desks:
+            if source_path in desk.store.watched_paths():
+                desk._on_source_changed(source_path)
+
+    # -- reading ----------------------------------------------------------
+
+    def state_json(self) -> dict:
+        with self._lock:
+            desk = self.current
+            state = desk.state_json()
+        state["desk"] = desk.name
+        state["desks"] = self.names()
+        state["data_dir"] = str(self.data_dir)
+        return state
+
+    def content(self, desk_name: str, sheet_id: str, version: int | None):
+        return self.get(desk_name).content(sheet_id, version)
+
     # -- lifetime ---------------------------------------------------------
 
     def start(self) -> None:
@@ -293,6 +537,15 @@ class Desk:
 
     def stop(self) -> None:
         self.watcher.stop()
+
+
+def _desk_name(name) -> str:
+    if not isinstance(name, str) or not DESK_NAME.match(name.strip()) or name != name.strip():
+        raise BadRequest(
+            f"a desk name is letters, digits, spaces, dots, dashes or underscores, "
+            f"up to 40 of them, not {name!r}"
+        )
+    return name
 
 
 def _number(params: dict, key: str) -> float:
@@ -315,6 +568,17 @@ def _identifier(params: dict, key: str) -> str:
     if not isinstance(value, str):
         raise BadRequest(f"{key} must be a sheet or pile id, not {value!r}")
     return value
+
+
+def _bytes(params: dict, key: str) -> bytes:
+    """A file's bytes off the wire, carried as base64 inside the JSON body."""
+    value = params.get(key)
+    if not isinstance(value, str):
+        raise BadRequest(f"{key} must be the file's bytes as base64, not {type(value).__name__}")
+    try:
+        return base64.b64decode(value, validate=True)
+    except (binascii.Error, ValueError):
+        raise BadRequest(f"{key} is not valid base64") from None
 
 
 LAYOUT_OPS = {
@@ -364,8 +628,13 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "desk"
 
     @property
+    def desks(self) -> Desks:
+        return self.server.desks
+
+    @property
     def desk(self) -> Desk:
-        return self.server.desk
+        """The current desk — where everything lands."""
+        return self.server.desks.current
 
     def log_message(self, fmt, *args):
         sys.stderr.write("%s %s\n" % (self.address_string(), fmt % args))
@@ -415,7 +684,7 @@ class Handler(BaseHTTPRequestHandler):
         path = unquote(urlparse(self.path).path)
         try:
             if path == "/api/state":
-                return self._json(200, self.desk.state_json())
+                return self._json(200, self.desks.state_json())
             if path == "/api/events":
                 return self._events()
             if path.startswith("/api/content/"):
@@ -451,10 +720,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self._trash(body)
             if path == "/api/restore":
                 return self._restore(body)
+            if path == "/api/clear":
+                return self._json(200, {"trashed": self.desk.clear()})
+            if path == "/api/comments":
+                return self._json(200, {"sheet": self.desk.comment(body.get("op"), body)})
+            if path == "/api/desks":
+                return self._desks(body)
             return self._error(404, f"no such endpoint: {path}")
         except BrokenPipeError:
             pass
-        except (BadRequest, PublishError) as exc:
+        except (BadRequest, PublishError, CommentError) as exc:
             return self._error(400, str(exc))
         except Exception as exc:
             self.log_error("%s", exc)
@@ -466,11 +741,16 @@ class Handler(BaseHTTPRequestHandler):
     # -- endpoints --------------------------------------------------------
 
     def _publish(self, body: dict):
+        """Hand a file to the desk: by path when it is on this machine, or as
+        bytes when it was sent from another one. Same verb, two transports."""
         source_path = body.get("source_path") or body.get("path")
         if not isinstance(source_path, str) or not source_path.strip():
             return self._error(400, f"publish needs a source_path, not {source_path!r}")
         try:
-            sheet = self.desk.publish(source_path)
+            if "content" in body:
+                sheet = self.desk.receive(body.get("origin"), source_path, _bytes(body, "content"))
+            else:
+                sheet = self.desk.publish(source_path)
         except PublishError as exc:
             return self._error(400, str(exc))
         return self._json(200, {"sheet": sheet, "desk_url": self.server.desk_url})
@@ -499,21 +779,29 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(404, f"no sheet {sheet_id!r}")
         return self._json(200, {"sheet": sheet})
 
+    def _desks(self, body: dict):
+        op = body.get("op")
+        ops = {"create": self.desks.create, "switch": self.desks.switch, "remove": self.desks.remove}
+        if op not in ops:
+            return self._error(400, f"desks needs an op of create, switch or remove, not {op!r}")
+        return self._json(200, ops[op](body.get("name")))
+
     def _content(self, path: str):
+        # /api/content/<desk>/<sheet id>[/<version>]
         parts = [part for part in path[len("/api/content/") :].split("/") if part]
-        if not parts:
+        if len(parts) < 2:
             return self._error(404, "no content for that sheet")
-        sheet_id = parts[0]
+        desk_name, sheet_id = parts[0], parts[1]
         version = None
-        if len(parts) > 1:
+        if len(parts) > 2:
             try:
-                version = int(parts[1])
+                version = int(parts[2])
             except ValueError:
-                return self._error(404, f"sheet {sheet_id!r} has no version {parts[1]!r}")
+                return self._error(404, f"sheet {sheet_id!r} has no version {parts[2]!r}")
         try:
-            data, content_type = self.desk.content(sheet_id, version)
+            data, content_type = self.desks.content(desk_name, sheet_id, version)
         except (KeyError, OSError):
-            return self._error(404, f"no content for sheet {sheet_id!r}")
+            return self._error(404, f"no content for sheet {sheet_id!r} on desk {desk_name!r}")
         # A named version's content never changes, so it may be cached hard: a
         # new version arrives at a new URL. The unversioned URL follows the
         # sheet, so caching it would freeze a sheet on an old picture forever.
@@ -521,7 +809,7 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, data, content_type, extra={"Cache-Control": cache})
 
     def _events(self):
-        q = self.desk.bus.subscribe()
+        q = self.desks.bus.subscribe()
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-store")
@@ -545,7 +833,7 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass
         finally:
-            self.desk.bus.unsubscribe(q)
+            self.desks.bus.unsubscribe(q)
 
     def _static(self, path: str):
         rel = "index.html" if path in ("/", "") else path.lstrip("/")
@@ -561,9 +849,9 @@ class DeskServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, address, desk: Desk, desk_url: str):
+    def __init__(self, address, desks: Desks, desk_url: str):
         super().__init__(address, Handler)
-        self.desk = desk
+        self.desks = desks
         self.desk_url = desk_url
 
     def server_bind(self):
@@ -738,9 +1026,9 @@ def build() -> tuple[DeskServer, str]:
     debounce = float(os.environ.get("DESK_DEBOUNCE") or DEFAULT_DEBOUNCE)
     poll = float(os.environ.get("DESK_POLL_INTERVAL") or DEFAULT_POLL_INTERVAL)
     bind, hostname = resolve_host()
-    desk = Desk(data_dir, debounce=debounce, poll_interval=poll)
+    desks = Desks(data_dir, debounce=debounce, poll_interval=poll)
     url = f"http://{hostname}:{port}"
-    return DeskServer((bind, port), desk, url), url
+    return DeskServer((bind, port), desks, url), url
 
 
 def main() -> int:
@@ -752,9 +1040,9 @@ def main() -> int:
         # what is wanted when the desk starts before Tailscale does.
         sys.stderr.write(f"desk: {exc}\n")
         return 1
-    server.desk.start()
+    server.desks.start()
     sys.stderr.write(
-        f"desk: data in {server.desk.data_dir}, "
+        f"desk: data in {server.desks.data_dir}, "
         f"listening on {server.server_address[0]}:{server.server_address[1]}\n"
     )
     sys.stderr.write(f"desk: {url}\n")
@@ -764,7 +1052,7 @@ def main() -> int:
     except KeyboardInterrupt:
         pass
     finally:
-        server.desk.stop()
+        server.desks.stop()
         server.server_close()
     return 0
 
