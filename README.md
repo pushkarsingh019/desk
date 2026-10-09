@@ -34,8 +34,9 @@ Type `/desk` in Claude Code or Pi, `$desk` in Codex or T3 Code:
 /desk                                  # the newest figure you just made
 /desk path/to/figure.svg               # that one specifically
 /desk path/to/figure.svg --to bobs-mac # on Bob's desk instead of yours
-/desk feedback                         # the agent reads the comments you pinned
+/desk feedback                         # the agent reads the comments you pinned on what it just put up
 /desk feedback path/to/figure.svg      # on that sheet only
+/desk feedback --all                   # on every sheet on the desk
 ```
 
 Figures may be `.svg`, `.png`, `.pdf`, `.html`, or `.md`.
@@ -52,8 +53,10 @@ feedback` and the agent reads your comments back with where each one is, in
 pixels and in words, fixes the plotting code, and re-runs it so the sheet
 updates under your pins. Look, and **resolve** what is fixed — the agent never
 does; it cannot write, resolve, or remove a comment. A `/desk` on a sheet with
-open comments tells the agent to read them first. The same thing from a shell
-is `desk feedback [path] [--json]`.
+open comments tells the agent to read them first. A desk holds many figures,
+so bare `/desk feedback` covers the ones made from the directory the agent is
+working in, newest first; `--all` is the whole desk. The same thing from a
+shell is `desk feedback [path] [--all] [--json]`.
 
 **Someone else's desk.** `--to` names a machine on your tailnet that runs a
 desk. The figure lands in *their* inbox, marked with where it came from, and

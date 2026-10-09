@@ -2128,7 +2128,7 @@ def test_desk_feedback_reports_every_open_comment_with_where_it_is(desk, figures
     _comment(desk, "add", sheet_id=binned_id, anchor=None, text="in the trash")
     desk.post("/api/trash", {"sheet_id": binned_id})
 
-    proc = _feedback(desk)
+    proc = _feedback(desk, cwd=figures)
 
     assert proc.returncode == 0, proc.stderr
     out = proc.stdout
@@ -2156,7 +2156,7 @@ def test_desk_feedback_json_is_the_same_report_as_one_object(desk, figures):
     _comment(desk, "add", sheet_id=sid, anchor={"x": 0.5, "y": 0.5, "w": 0.25, "h": 0.25}, text="here")
     _comment(desk, "add", sheet_id=sid, anchor=None, text="everywhere")
 
-    proc = _feedback(desk, "--json")
+    proc = _feedback(desk, "--json", cwd=figures)
 
     assert proc.returncode == 0, proc.stderr
     report = _json.loads(proc.stdout)
@@ -2202,7 +2202,7 @@ def test_desk_feedback_gives_pixels_against_the_commented_version_while_it_is_re
     raster.write_bytes(png(200, 300))
     desk.publish(raster)
 
-    proc = _feedback(desk, "--json")
+    proc = _feedback(desk, "--json", cwd=figures)
     [sheet] = _json.loads(proc.stdout)["sheets"]
     [comment] = sheet["comments"]
 
@@ -2211,7 +2211,7 @@ def test_desk_feedback_gives_pixels_against_the_commented_version_while_it_is_re
     assert comment["retained"] is True
     assert comment["pixels"] == {"x": 100, "y": 150, "w": 100, "h": 150}
     assert comment["pixels_on_version"] == {"x": 50, "y": 50, "w": 50, "h": 50}
-    text = _feedback(desk).stdout
+    text = _feedback(desk, cwd=figures).stdout
     assert "#1  on v1 — lower right" in text
     assert "pixels on v2: x 100–200, y 150–300 (of 200×300)" in text
     assert "pixels on v1: x 50–100, y 50–100" in text
@@ -2226,13 +2226,13 @@ def test_desk_feedback_says_when_the_commented_version_is_no_longer_retained(des
         raster.write_bytes(png(200, 200) + bytes([i]))
         desk.publish(raster)
 
-    proc = _feedback(desk)
+    proc = _feedback(desk, cwd=figures)
 
     assert proc.returncode == 0, proc.stderr
     assert "#1  on v1, no longer retained — upper left" in proc.stdout
     assert "pixels on v22: x 0–100, y 0–100 (of 200×200)" in proc.stdout
     assert "pixels on v1" not in proc.stdout
-    [sheet] = _json.loads(_feedback(desk, "--json").stdout)["sheets"]
+    [sheet] = _json.loads(_feedback(desk, "--json", cwd=figures).stdout)["sheets"]
     assert sheet["comments"][0]["retained"] is False
     assert sheet["comments"][0]["pixels_on_version"] is None
 
@@ -2247,7 +2247,7 @@ def test_desk_feedback_still_reports_fractions_when_the_size_cannot_be_read(desk
     nid = desk.publish(notes).json()["sheet"]["id"]
     _comment(desk, "add", sheet_id=nid, anchor=None, text="shorter")
 
-    proc = _feedback(desk)
+    proc = _feedback(desk, cwd=figures)
 
     assert proc.returncode == 0, proc.stderr
     assert "natural size not available" in proc.stdout
@@ -2260,7 +2260,7 @@ def test_desk_feedback_names_the_origin_of_a_sent_sheet(desk):
     sent = desk.send("alice-mac", ALICE_PATH, SVG.format(color="red").encode()).json()["sheet"]
     _comment(desk, "add", sheet_id=sent["id"], anchor={"x": 0.9, "y": 0.9, "w": 0.1, "h": 0.1}, text="for alice")
 
-    proc = _feedback(desk)
+    proc = _feedback(desk, "--all")
 
     assert proc.returncode == 0, proc.stderr
     assert ALICE_PATH in proc.stdout
@@ -2292,16 +2292,59 @@ def test_desk_feedback_with_nothing_open_says_so_and_exits_zero(desk, figures):
     fig.write_text(SVG.format(color="red"))
     sid = desk.publish(fig).json()["sheet"]["id"]
 
-    proc = _feedback(desk)
+    proc = _feedback(desk, cwd=figures)
     assert proc.returncode == 0, proc.stderr
-    assert proc.stdout.strip() == "no open feedback"
+    assert proc.stdout.strip() == f"no open feedback under {figures} (desk feedback --all for the whole desk)"
+    assert _feedback(desk, "--all").stdout.strip() == "no open feedback"
 
     cid = _comment(desk, "add", sheet_id=sid, anchor=None, text="x").json()["sheet"]["comments"][0]["id"]
     _comment(desk, "resolve", sheet_id=sid, comment_id=cid)
     proc = _feedback(desk, str(fig))
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip() == "no open feedback"
-    assert _json.loads(_feedback(desk, "--json").stdout)["sheets"] == []
+    assert _json.loads(_feedback(desk, "--json", cwd=figures).stdout)["sheets"] == []
+
+
+def test_desk_feedback_is_scoped_to_what_this_agent_put_up(desk, figures, tmp_path):
+    """A desk holds many sheets; the user is commenting on the ones the agent
+    just made. Bare `desk feedback` is the working directory, newest first;
+    the whole desk is `--all`."""
+    mine = figures / "fit.svg"
+    mine.write_text(SVG.format(color="red"))
+    mine_id = desk.publish(mine).json()["sheet"]["id"]
+    _comment(desk, "add", sheet_id=mine_id, anchor=None, text="mine, older")
+    newer = figures / "nested" / "hist.svg"
+    newer.parent.mkdir()
+    newer.write_text(SVG.format(color="blue"))
+    newer_id = desk.publish(newer).json()["sheet"]["id"]
+    _comment(desk, "add", sheet_id=newer_id, anchor=None, text="mine, newer")
+    elsewhere = tmp_path / "other-project" / "old.svg"
+    elsewhere.parent.mkdir()
+    elsewhere.write_text(SVG.format(color="green"))
+    other_id = desk.publish(elsewhere).json()["sheet"]["id"]
+    _comment(desk, "add", sheet_id=other_id, anchor=None, text="someone else's project")
+    sent = desk.send("alice-mac", ALICE_PATH, SVG.format(color="red").encode()).json()["sheet"]
+    _comment(desk, "add", sheet_id=sent["id"], anchor=None, text="a copy from alice")
+
+    proc = _feedback(desk, cwd=figures)
+
+    assert proc.returncode == 0, proc.stderr
+    assert "mine, newer" in proc.stdout and "mine, older" in proc.stdout
+    assert proc.stdout.index("mine, newer") < proc.stdout.index("mine, older"), "newest first"
+    assert "someone else's project" not in proc.stdout
+    assert "a copy from alice" not in proc.stdout
+    scoped = _json.loads(_feedback(desk, "--json", cwd=figures).stdout)
+    assert scoped["under"] == str(figures)
+    assert [s["source_path"] for s in scoped["sheets"]] == [str(newer), str(mine)]
+
+    everything = _feedback(desk, "--all", cwd=figures).stdout
+    for text in ("mine, newer", "mine, older", "someone else's project", "a copy from alice"):
+        assert text in everything
+    assert "under" not in _json.loads(_feedback(desk, "--all", "--json", cwd=figures).stdout)
+
+    # The directory can be named outright, as present's --in names one.
+    proc = _feedback(desk, "--in", str(elsewhere.parent))
+    assert "someone else's project" in proc.stdout and "mine" not in proc.stdout
 
 
 def test_desk_feedback_for_a_path_that_is_not_a_sheet_exits_nonzero(desk, figures):

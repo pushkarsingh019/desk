@@ -202,9 +202,9 @@ only. On the desk a sheet shows only a count of its open comments on its
 paper margin. What stayed cut: agent-authored text, replies, freehand (an
 agent cannot read a squiggle), and a version-stepping UI.
 
-**Feedback is read, never pushed.** `desk feedback [path] [--json]` prints
-every open comment on the current desk, or on one sheet, with where each one
-is three ways: a cell of a three-by-three grid in words, the anchor as
+**Feedback is read, never pushed.** `desk feedback [path] [--all] [--json]`
+prints every open comment on one sheet, or on the sheets the agent put up,
+with where each one is three ways: a cell of a three-by-three grid in words, the anchor as
 fractions, and the anchor in pixels against the current version — and
 against the version it was made on while that is retained. The pixels come
 from a natural size the server reads from the stored bytes at report time
@@ -212,7 +212,13 @@ from a natural size the server reads from the stored bytes at report time
 pixels, otherwise the `viewBox`, which is the coordinate system an agent
 reading the file will find) and carries in the sheet JSON; the command
 measures nothing itself, and when there is no size it gives fractions, says
-why, and still exits 0. It never starts the server. `desk present` says when
+why, and still exits 0. It never starts the server. **Its default scope is what the agent just put
+up.** A desk holds many figures from many sessions, and the comments waiting
+for an agent are on the ones it made, so bare `desk feedback` has the same
+scope as bare `desk present`: the sheets whose files are under the directory
+the agent is working in, newest first. A sent sheet is never in that scope,
+its path being on another machine. `--all` is the whole desk, for when the
+user asks about it. `desk present` says when
 the sheet it just presented has open comments, in a third line that names
 the command to run, and never when sending with `--to`, because comments
 never travel back to the sender. The `/desk` skill is where this becomes a

@@ -23,15 +23,16 @@ apart; anything else is a path. If the shell cannot find `desk`, use
 The desk is where the user looks at figures. When something is wrong with
 one, they do not describe it to you; they pin a **comment** on it, in the
 browser, on the exact spot. Then they come back here and type `/desk` or
-`/desk feedback`. You read the comments, fix the plotting code, re-run it, and
-the sheet updates in place under their eyes. They look, and **resolve** what is
-fixed. That is the whole loop, and it is theirs to drive:
+`/desk feedback`, or just say "I left comments on the desk". You read the
+comments, fix the plotting code, re-run it, and the sheet updates in place
+under their eyes. They look, and **resolve** what is fixed. That is the whole
+loop, and it is theirs to drive:
 
 1. The user looks at the figure on the desk.
 2. The user pins comments in the browser — a rectangle, a point, or the whole
    sheet — each with a few words.
-3. The user types `/desk feedback`, or presents again and the command says
-   there are open comments.
+3. The user types `/desk feedback`, says they have left comments, or presents
+   again and the command says there are open comments.
 4. You read the feedback and fix the code. The watched sheet updates itself.
 5. The user looks again and resolves what is fixed. What is not stays open.
 
@@ -80,10 +81,19 @@ switches, then presents.
 ## Reading feedback
 
 ```
-desk feedback             # every sheet on the current desk with open comments
+desk feedback             # the figures you put up from here, newest first
 desk feedback <path>      # that one sheet
+desk feedback --all       # every sheet on the desk with open comments
 desk feedback --json      # the same, as one object, if you would rather parse it
 ```
+
+The desk holds many figures at once, from many sessions, and the comments
+waiting for you are on the ones you just made. So bare `desk feedback` has
+the same scope as bare `desk present`: every sheet whose file is under the
+directory you are working in, newest first. That is the command to run when
+the user says they have left comments, with no path. Reach for `--all` only
+when the user asks about the whole desk, and for `<path>` when they name a
+figure.
 
 It never starts the server. It prints, per sheet, the source path, where it
 came from if it was sent from another machine, and the current version; and
@@ -99,7 +109,9 @@ text. "Where" comes three ways, and you should use all of them:
   `no longer retained`, the picture it was made on is gone, and the fractions
   and the current pixels are what you have.
 
-`no open feedback` means there is nothing to do; say so and stop.
+`no open feedback under <directory>` means nothing you put up from here has
+a comment waiting. Say so and stop; do not widen to `--all` unless the user
+asks, because the rest of the desk is other work.
 
 ### What acting on it means
 

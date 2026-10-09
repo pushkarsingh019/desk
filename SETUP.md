@@ -91,7 +91,7 @@ desk status
 
 Prints the URL, the sheet counts, the data directory, and the log path. (The
 other commands are `desk present [path] [--to machine]` and `desk feedback
-[path] [--json]`; `desk --help` lists them.) If the
+[path] [--all] [--json]`; `desk --help` lists them.) If the
 shell cannot find `desk`, call `~/.local/bin/desk` and tell the user their PATH
 is missing `~/.local/bin`.
 
@@ -128,8 +128,9 @@ Tell them, in this order:
    script updates the sheet in place.
 3a. That they can pin comments on a figure — double-click it, press `c`, drag
    a rectangle or click a point, type, `Enter` — and `/desk feedback` has the
-   agent read them back and fix the code. From a shell that is `desk
-   feedback [path] [--json]`. They resolve a comment when it is dealt with;
+   agent read them back and fix the code. Bare, it covers the figures made from
+   the directory the agent is working in; `--all` is the whole desk. From a
+   shell that is `desk feedback [path] [--all] [--json]`. They resolve a comment when it is dealt with;
    the agent never does.
 4. That `/desk <path> --to <machine>` puts a figure on someone else's desk,
    if they run one on the tailnet — and that this machine's tailnet name is

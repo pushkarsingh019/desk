@@ -22,7 +22,7 @@ removes, or replies to one. The loop is the user's to drive — look at the
 figure, pin comments in the browser, type `/desk`, and the agent reads and
 fixes.
 
-- [x] `desk feedback` with no path reports every live sheet on the current desk that has open comments; with a path, that sheet, resolved the way `present` resolves one; trashed sheets and resolved comments are skipped
+- [x] `desk feedback` with no path reports the live sheets with open comments whose files are under the directory the agent is working in (the same scope as bare `present`), newest first, so that on a full desk the agent reads the comments on what it just put up; `--all` is every sheet on the current desk; with a path, that sheet, resolved the way `present` resolves one; trashed sheets, sent sheets outside `--all`, and resolved comments are skipped
 - [x] Per sheet: the source path, its origin if it has one, and the current version; per open comment: its number, the version it was made on, the region as fractions and as pixels against the current version (and against the commented version when that is still retained), a coarse verbal location from a three-by-three grid of the box ("upper right", "left edge, middle", "whole sheet"), and the text
 - [x] Pixels come from a natural size the server computes from the stored bytes at report time (PNG from the IHDR chunk, SVG from `width`/`height` or `viewBox`, no dependencies) and reports in the sheet JSON; the `desk` command measures nothing itself. When the size cannot be read, the report gives fractions, says why, and still exits 0
 - [x] A comment whose version has been evicted is reported as "on vN, no longer retained", with pixels against the current version only

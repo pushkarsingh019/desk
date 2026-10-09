@@ -279,7 +279,13 @@ def cmd_present(args) -> int:
 
 
 def cmd_feedback(args) -> int:
-    """Print every open comment on the current desk, or on one sheet.
+    """Print the open comments on what the agent just put up, or on one sheet.
+
+    A desk holds many sheets at once, and the ones the user is commenting on
+    are the ones this agent just made. So with no path the scope is the same
+    as bare `present`: the directory the agent is working in. Every live
+    sheet under it with open comments is reported, newest first. `--all` is
+    the whole desk.
 
     Nothing here measures anything: the natural size and the comment numbers
     come from the desk, and this command only turns fractions into pixels and
@@ -298,6 +304,7 @@ def cmd_feedback(args) -> int:
 
     # Live sheets only: a trashed sheet's comments are in the trash with it.
     sheets = state["sheets"]
+    scope = None
     if args.path:
         wanted = feedback_path(args.path, args.directory)
         # A local sheet first; a sent sheet with the same path there second.
@@ -308,17 +315,40 @@ def cmd_feedback(args) -> int:
         if not matches:
             raise SystemExit(f"desk: {wanted} is not a sheet on the desk {state['desk']!r}")
         sheets = matches[:1]
+    elif not args.all:
+        scope = search_root(args.directory)
+        # A sent sheet's path names a file on another machine, so it is never
+        # under this directory, whatever its spelling.
+        sheets = [
+            s for s in sheets
+            if s.get("origin") is None and _is_under(s["source_path"], scope)
+        ]
+    sheets = sorted(sheets, key=lambda s: s.get("updated_at", 0), reverse=True)
 
     report = [feedback_for(sheet) for sheet in sheets]
     report = [r for r in report if r["comments"]]
     if args.json:
-        print(json.dumps({"desk": state["desk"], "sheets": report}, indent=2))
+        payload = {"desk": state["desk"], "sheets": report}
+        if scope is not None:
+            payload["under"] = str(scope)
+        print(json.dumps(payload, indent=2))
         return 0
     if not report:
-        print("no open feedback")
+        if scope is not None:
+            print(f"no open feedback under {scope} (desk feedback --all for the whole desk)")
+        else:
+            print("no open feedback")
         return 0
     print("\n\n".join(format_feedback(r) for r in report))
     return 0
+
+
+def _is_under(source_path: str, root: Path) -> bool:
+    try:
+        Path(source_path).relative_to(root)
+        return True
+    except ValueError:
+        return False
 
 
 def feedback_path(path: str, directory: str | None) -> str:
@@ -507,7 +537,14 @@ def main(argv=None) -> int:
     present.set_defaults(func=cmd_present)
 
     feedback = sub.add_parser("feedback", help="read the user's open comments back")
-    feedback.add_argument("path", nargs="?", help="one sheet's figure (default: every sheet with open comments)")
+    feedback.add_argument(
+        "path",
+        nargs="?",
+        help="one sheet's figure (default: every sheet from this directory with open comments, newest first)",
+    )
+    feedback.add_argument(
+        "--all", action="store_true", help="every sheet on the desk with open comments, not only this directory's"
+    )
     feedback.add_argument(
         "--in",
         dest="directory",
