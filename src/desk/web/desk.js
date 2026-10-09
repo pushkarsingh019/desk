@@ -1197,9 +1197,15 @@ function openFullscreen(id) {
   renderPins(sheet);
 }
 
+// Whether the next load of the fullscreen content should fit the view. Set
+// per fill, not captured by the load handler: the handler fires again on
+// every version that arrives, and a version must never move the view.
+let fitOnLoad = false;
+
 function fillFullscreen(sheet, { keepView }) {
   const existing = fullscreenHolder.querySelector('img, iframe');
   const wantsFrame = FRAME_KINDS.has(sheet.kind);
+  fitOnLoad = !keepView;
   if (!existing || (existing.tagName === 'IFRAME') !== wantsFrame) {
     // Only the content is replaced: the pins layer stays, so a sheet whose
     // kind changed under its comments keeps them on screen.
@@ -1209,7 +1215,8 @@ function fillFullscreen(sheet, { keepView }) {
       if (node.tagName === 'IMG' && node.naturalWidth) {
         naturalSize = { w: node.naturalWidth, h: node.naturalHeight };
       }
-      if (!keepView) fitFullscreen();
+      if (fitOnLoad) fitFullscreen();
+      else sizeHolder();
     });
     node.src = sheet.content_url;
     fullscreenHolder.insertBefore(node, pinsLayer);
@@ -1220,6 +1227,19 @@ function fillFullscreen(sheet, { keepView }) {
   if (!keepView) {
     naturalSize = wantsFrame ? { w: 1100, h: 800 } : naturalSize;
     fitFullscreen();
+  }
+}
+
+/** The holder is the figure's natural box; the pins are fractions of it. A
+ *  new version with a different natural size resizes the box in place and
+ *  leaves the view — scale, position, and an open popover — exactly as the
+ *  user had it. */
+function sizeHolder() {
+  fullscreenHolder.style.width = naturalSize.w + 'px';
+  fullscreenHolder.style.height = naturalSize.h + 'px';
+  if (openCommentId !== null) {
+    const label = pinLabel(openCommentId);
+    if (label) showPopover(openCommentId, label);
   }
 }
 
@@ -1235,6 +1255,7 @@ function fitFullscreen() {
     x: (window.innerWidth - naturalSize.w * scale) / 2,
     y: (window.innerHeight - naturalSize.h * scale) / 2,
   };
+  closePopover();
   applyFullscreenView();
 }
 
@@ -1244,7 +1265,6 @@ function applyFullscreenView() {
   // The pins ride inside the scaled holder and undo the scale on themselves,
   // so a pin is the same small circle at 2% and at 3200%.
   fullscreenHolder.style.setProperty('--pin-scale', 1 / fullscreenView.scale);
-  closePopover();
   positionEditor();
 }
 
@@ -1284,6 +1304,7 @@ fullscreenStage.addEventListener(
   'wheel',
   (e) => {
     e.preventDefault();
+    closePopover();
     const factor = e.ctrlKey || e.metaKey ? Math.exp(-e.deltaY * 0.01) : Math.exp(-e.deltaY * 0.0015);
     const next = Math.min(MAX_SCALE * 4, Math.max(0.02, fullscreenView.scale * factor));
     const k = next / fullscreenView.scale;
@@ -1384,10 +1405,20 @@ function renderPins(sheet) {
     pin.appendChild(label);
     pinsLayer.appendChild(pin);
   }
-  if (openCommentId !== null && !pinsLayer.querySelector('[data-comment-id="' + openCommentId + '"]') &&
-      !pinsInBar.querySelector('[data-comment-id="' + openCommentId + '"]')) {
-    closePopover();
+  if (openCommentId !== null) {
+    // The labels were just rebuilt. An open popover follows its comment to
+    // the new label, and goes away only if the comment itself did.
+    const label = pinLabel(openCommentId);
+    if (label) showPopover(openCommentId, label);
+    else closePopover();
   }
+}
+
+function pinLabel(commentId) {
+  return (
+    pinsLayer.querySelector('[data-comment-id="' + commentId + '"]') ||
+    pinsInBar.querySelector('[data-comment-id="' + commentId + '"]')
+  );
 }
 
 function placePin(pin, a) {
