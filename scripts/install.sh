@@ -276,7 +276,25 @@ PLISTEOF
   launchctl bootout "gui/$(id -u)/$LEGACY_LABEL" 2>/dev/null || true
   rm -f "$HOME/Library/LaunchAgents/$LEGACY_LABEL.plist"
   launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
-  launchctl bootstrap "gui/$(id -u)" "$PLIST"
+  # bootout returns before the old agent is fully gone, and a bootstrap in
+  # that window fails with "Input/output error" (5) and leaves no desk
+  # running at all. Wait for the label to disappear, then retry the
+  # bootstrap a few times rather than give up on the first try.
+  i=0
+  while launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1 && [ $i -lt 20 ]; do
+    i=$((i + 1))
+    sleep 0.5
+  done
+  i=0
+  until launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null; do
+    i=$((i + 1))
+    if [ $i -ge 10 ]; then
+      echo "desk: launchctl would not load the agent. Try by hand:" >&2
+      echo "    launchctl bootstrap gui/$(id -u) $PLIST" >&2
+      exit 1
+    fi
+    sleep 1
+  done
   launchctl enable "gui/$(id -u)/$LABEL"
 }
 
