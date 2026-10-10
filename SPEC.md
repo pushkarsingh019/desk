@@ -91,6 +91,7 @@ agent iterates.
 42. As a scientist, I want more than one desk — one per paper, say — and to switch between them on the page, so that `/desk` lands on whichever desk I have out and the others keep their layouts untouched.
 43. As a scientist, I want to pin a comment on a figure — on a region, a point, or the whole sheet — and see it stay there through new versions until I resolve it, so that what I think is wrong with a plot is recorded where it is wrong, not in a chat I will scroll away from.
 44. As a scientist, I want to type `/desk feedback` and have the agent read my comments back — where each one is, in terms it can act on — fix the plotting code, and re-run it so the sheet updates under my comments, so that critiquing a figure is pointing at it rather than describing it, and the fix lands where I am already looking.
+45. As a scientist, I want a **feedback** button on the sheet I am looking at, so that once my comments are pinned the agent that made the figure starts on them without my going back to the terminal to say so.
 
 ## Implementation Decisions
 
@@ -233,6 +234,25 @@ whether the user looked), anything model-invoked, and agent-authored text —
 the agent reads comments and never writes, resolves, removes, or replies to
 one. Layout authority stays the user's; so does the last word on a figure.
 
+**The feedback button is the user asking, from the page.** Story 45. The
+browser talks only to the desk, and no harness lets a page put words in a
+chat, so the button does not run anything: it tells the desk, and the desk
+wakes whoever is listening. Listening is `desk feedback --wait [path]`, the
+same command held open — a long poll on `/api/feedback/wait` with the same
+scope as a bare `desk feedback`, answered with the sheet when the button is
+pressed on one in scope, or with nothing after its time is up. The page's
+`POST /api/feedback` says how many waiters it woke, and the button reports
+that honestly: "sent to your agent", or "no agent is waiting" with the
+command copied to the clipboard, which is the fallback that always works.
+Who listens is the harness's business and lives in the skill, not the
+server: an agent whose harness wakes it when a background command exits runs
+the wait itself after every `desk present`; one whose harness cannot hands
+the report to a command of its own with `--then`, which pushes a prompt into
+the session the harness's way. Waiting reads and nothing else. What stays
+cut: the desk learning which session presented a sheet, which the scope rule
+makes unnecessary, and any channel by which the desk reaches an agent that
+is not already listening.
+
 **Trash tombstones the path.** A trashed path stops being watched and will not
 be re-created by a subsequent file change. An explicit `/desk` on that path
 clears the tombstone and brings it back. Zombie sheets were identified as the
@@ -344,7 +364,7 @@ Deliberately cut during design, each for a stated reason:
 - **HTTPS, tokens, passwords, any auth.** Tailscale is the perimeter.
 - **MCP server.** Binds to one client for no gain over a shell command.
 - **Model-invoked presentation.** User types `/desk`; the model never fires it.
-- **Read-back / acknowledgement.** Cut as "the agent learns nothing about whether the user looked", and reversed in one direction only: story 44. The agent can read the user's comments when the user asks it to (`/desk feedback`, or a `desk present` that reports open comments). What stays cut: the agent still learns nothing about whether the user looked, nothing reaches it unasked, and it cannot acknowledge, resolve, or reply.
+- **Read-back / acknowledgement.** Cut as "the agent learns nothing about whether the user looked", and reversed in one direction only: story 44, then story 45. The agent can read the user's comments when the user asks it to (`/desk feedback`, a `desk present` that reports open comments, or the feedback button on the sheet, which wakes a `desk feedback --wait`). What stays cut: the agent still learns nothing about whether the user looked, nothing reaches it unasked, and it cannot acknowledge, resolve, or reply.
 - **Annotation and two-way feedback.** Cut as "storage should not preclude it later, but no code now", and reversed once the desk had proved it gets used: story 43. What stays cut is agent-authored text of any kind — the agent never writes, replies to, resolves, or removes a comment — freehand drawing, and painting over a figure, except for the pins themselves.
 - **Directory watching, watch registry, drop directory, inbox flood caps.** All obsoleted by implicit path watching.
 - **Version-stepping UI.** Versions are stored; no interface exposes them until one is actually wanted.

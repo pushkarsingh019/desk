@@ -999,7 +999,8 @@ body.stale #mug-body { animation: mug-alarm 3s ease-in-out infinite; }
 #fullscreen-pins-sheet .pin-label:active { transform: translateY(1px); }
 #fullscreen-comment.armed { box-shadow: 0 0 0 2px var(--accent); }
 
-#comment-hint {
+#comment-hint,
+#feedback-note {
   position: absolute;
   top: 16px;
   left: 50%;
@@ -1013,7 +1014,9 @@ body.stale #mug-body { animation: mug-alarm 3s ease-in-out infinite; }
   white-space: nowrap;
   pointer-events: none;
 }
-#comment-hint[hidden] { display: none; }
+#comment-hint[hidden],
+#feedback-note[hidden] { display: none; }
+#fullscreen-feedback:disabled { opacity: .45; cursor: default; }
 
 /* The editor and the popover are screen-fixed: they sit beside a spot on the
    figure but never scale with it. */

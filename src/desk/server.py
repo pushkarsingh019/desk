@@ -22,15 +22,17 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import quote, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from desk import layout as layout_model
 from desk import render
-from desk.store import CommentError, PublishError, Store
+from desk.store import CommentError, PublishError, Store, is_under
 from desk.watcher import DEFAULT_DEBOUNCE, DEFAULT_POLL_INTERVAL, Watcher
 
 WEB_ROOT = Path(__file__).resolve().parent / "web"
 DEFAULT_PORT = 7777
+#: The longest one feedback wait is held open. The command re-asks.
+WAIT_TIMEOUT = 60.0
 DEFAULT_DATA_DIR = Path.home() / ".desk"
 
 #: Tailscale hands out addresses from the CGNAT range.
@@ -107,6 +109,11 @@ class Desk:
         self.layout = self._load_layout()
         self._reconcile()
         self._emit = emit
+        # Agents waiting for the user to ask for feedback: each a queue of
+        # one, with the scope it listens for. Nothing here is persisted — a
+        # waiter is a held connection, and it ends with the connection.
+        self._waiters_lock = threading.Lock()
+        self._waiters: list[tuple[dict, queue.Queue]] = []
 
     def emit(self, event: dict) -> None:
         event["desk"] = self.name
@@ -275,6 +282,53 @@ class Desk:
         payload = self.sheet_json(sheet)
         self.emit({"type": "sheet.changed", "sheet": payload})
         return payload
+
+    # -- feedback ---------------------------------------------------------
+
+    def wait_for_feedback(self, scope: dict, timeout: float) -> dict | None:
+        """Hold until the user asks for feedback on a sheet in `scope`, and
+        return that sheet, or None when nobody asked within `timeout`.
+
+        The scope is the one `desk feedback` reads with: `path` is one sheet,
+        `under` is every local sheet whose file is under that directory, and
+        neither is the whole desk. Reading only: waiting changes nothing on
+        the sheet and never resolves a comment.
+        """
+        q: queue.Queue = queue.Queue(maxsize=1)
+        entry = (scope, q)
+        with self._waiters_lock:
+            self._waiters.append(entry)
+        try:
+            return q.get(timeout=timeout)
+        except queue.Empty:
+            return None
+        finally:
+            with self._waiters_lock:
+                if entry in self._waiters:
+                    self._waiters.remove(entry)
+
+    def request_feedback(self, sheet_id) -> dict:
+        """The user asked, from the page, for the agent to read a sheet's
+        comments. Wake every waiter whose scope holds the sheet and say how
+        many there were, so the page can tell the user whether anyone heard."""
+        sheet = self.store.get(sheet_id) if isinstance(sheet_id, str) else None
+        if sheet is None or sheet["trashed"]:
+            raise BadRequest(f"no live sheet {sheet_id!r} on this desk")
+        payload = self.sheet_json(sheet)
+        if not payload["open_comments"]:
+            raise BadRequest(f"no open comments on {payload['name']}: pin one first")
+        woken = 0
+        with self._waiters_lock:
+            for scope, q in list(self._waiters):
+                if not _in_scope(payload, scope):
+                    continue
+                try:
+                    q.put_nowait(payload)
+                    woken += 1
+                except queue.Full:
+                    pass
+                self._waiters.remove((scope, q))
+        return {"sheet": payload, "waiters": woken}
 
     # -- reading ----------------------------------------------------------
 
@@ -539,6 +593,17 @@ class Desks:
         self.watcher.stop()
 
 
+def _in_scope(sheet: dict, scope: dict) -> bool:
+    """The scope rules of `desk feedback`: a path names one sheet wherever it
+    came from; a directory holds the local sheets whose files are under it;
+    an empty scope is the whole desk."""
+    if "path" in scope:
+        return sheet["source_path"] == scope["path"]
+    if "under" in scope:
+        return sheet["origin"] is None and is_under(sheet["source_path"], scope["under"])
+    return True
+
+
 def _desk_name(name) -> str:
     if not isinstance(name, str) or not DESK_NAME.match(name.strip()) or name != name.strip():
         raise BadRequest(
@@ -687,6 +752,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, self.desks.state_json())
             if path == "/api/events":
                 return self._events()
+            if path == "/api/feedback/wait":
+                return self._wait_for_feedback(parse_qs(urlparse(self.path).query))
             if path.startswith("/api/content/"):
                 return self._content(path)
             if path.startswith("/api/"):
@@ -724,6 +791,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, {"trashed": self.desk.clear()})
             if path == "/api/comments":
                 return self._json(200, {"sheet": self.desk.comment(body.get("op"), body)})
+            if path == "/api/feedback":
+                return self._json(200, self.desk.request_feedback(body.get("sheet_id")))
             if path == "/api/desks":
                 return self._desks(body)
             return self._error(404, f"no such endpoint: {path}")
@@ -807,6 +876,24 @@ class Handler(BaseHTTPRequestHandler):
         # sheet, so caching it would freeze a sheet on an old picture forever.
         cache = "public, max-age=31536000, immutable" if version is not None else "no-store"
         self._send(200, data, content_type, extra={"Cache-Control": cache})
+
+    def _wait_for_feedback(self, query: dict):
+        """Long poll: answer when the user asks for feedback in scope, or with
+        no sheet once `timeout` seconds have passed, and never before."""
+        scope = {}
+        if query.get("path"):
+            scope["path"] = query["path"][0]
+        elif query.get("under"):
+            scope["under"] = query["under"][0]
+        try:
+            timeout = float(query.get("timeout", [WAIT_TIMEOUT])[0])
+        except ValueError:
+            return self._error(400, f"timeout must be seconds, not {query['timeout'][0]!r}")
+        timeout = max(0.0, min(timeout, WAIT_TIMEOUT))
+        # The desk that was current when the wait began: switching desks
+        # moves where the next sheet lands, not what an agent is waiting on.
+        sheet = self.desk.wait_for_feedback(scope, timeout)
+        return self._json(200, {"sheet": sheet})
 
     def _events(self):
         q = self.desks.bus.subscribe()

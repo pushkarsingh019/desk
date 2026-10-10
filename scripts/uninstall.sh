@@ -32,5 +32,7 @@ for target_dir in $SKILL_DIRS; do
   # Only ever a symlink this script made; never a directory someone else owns.
   [ -L "$target_dir" ] && rm -f "$target_dir" || true
 done
+PI_EXT="${DESK_PI_EXTENSIONS:-$HOME/.pi/agent/extensions}/desk-feedback.ts"
+[ -L "$PI_EXT" ] && rm -f "$PI_EXT" || true
 
 echo "desk: removed. Your sheets are still in ${DESK_DATA_DIR:-$HOME/.desk}."

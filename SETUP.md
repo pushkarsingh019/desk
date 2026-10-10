@@ -132,6 +132,10 @@ Tell them, in this order:
    the directory the agent is working in; `--all` is the whole desk. From a
    shell that is `desk feedback [path] [--all] [--json]`. They resolve a comment when it is dealt with;
    the agent never does.
+3b. That the sheet has a **feedback** button: after `/desk`, the agent waits
+   for it, and pressing it starts the agent on the comments. If no agent is
+   waiting the button copies the command instead, to paste in the chat. In
+   pi this needs the extension the installer links (`desk: pi ext ->`).
 4. That `/desk <path> --to <machine>` puts a figure on someone else's desk,
    if they run one on the tailnet — and that this machine's tailnet name is
    what they would type to send one back.
@@ -195,7 +199,9 @@ and they are baked into the service it writes, so once is enough.
 | anything else | nothing — the user starts the server themselves | up to them |
 
 Everywhere: the `desk` command at `~/.local/bin/desk`, a symlink to
-`skill/desk` in each agent's skills directory, and the sheets in `~/.desk`,
+`skill/desk` in each agent's skills directory, a symlink to
+`skill/pi/desk-feedback.ts` in `~/.pi/agent/extensions` when pi is installed
+(`DESK_PI_EXTENSIONS` names another place), and the sheets in `~/.desk`,
 one directory per desk under `~/.desk/desks/`. A `~/.desk` from before there
 were several desks is moved into `desks/main/` the first time the new server
 starts.
@@ -216,5 +222,5 @@ It binds one address and nothing else, never `0.0.0.0`.
 sh scripts/uninstall.sh
 ```
 
-Removes the service, the `desk` command, and the skill links. The sheets stay
+Removes the service, the `desk` command, the skill links, and the pi extension link. The sheets stay
 in `~/.desk` — say so, and delete that directory only if the user asks.

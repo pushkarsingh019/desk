@@ -2404,3 +2404,222 @@ def test_desk_present_to_never_mentions_the_recipients_comments(desk, figures, f
     assert again.returncode == 0, again.stderr
     assert "open comment" not in again.stdout
     assert len(again.stdout.strip().splitlines()) == 2
+
+
+# --- 20: the feedback button ----------------------------------------------
+# The user asks for feedback from the page. The desk holds a waiting agent
+# open until then, and tells the page whether anyone was listening.
+
+import threading as _threading  # noqa: E402
+from urllib.parse import urlencode as _urlencode  # noqa: E402
+
+
+class _Waiter:
+    """An agent holding `desk feedback --wait` open, as the API sees it."""
+
+    def __init__(self, desk, timeout=10, **scope):
+        self.result = None
+        query = _urlencode({**scope, "timeout": timeout})
+        self.thread = _threading.Thread(
+            target=lambda: setattr(self, "result", desk.get("/api/feedback/wait?" + query, timeout=timeout + 10)),
+            daemon=True,
+        )
+        self.thread.start()
+        _time.sleep(0.3)  # let it register before anyone presses the button
+
+    def join(self):
+        self.thread.join(timeout=20)
+        assert self.result is not None, "the wait never answered"
+        assert self.result.status == 200, self.result.text
+        return self.result.json()["sheet"]
+
+
+def test_the_feedback_button_wakes_an_agent_waiting_under_that_directory(desk, figures):
+    fig, sheet = _sheet_with_svg(desk, figures)
+    _comment(desk, "add", sheet_id=sheet["id"], anchor=None, text="axis labels are too small")
+    waiter = _Waiter(desk, under=str(figures))
+
+    pressed = desk.post("/api/feedback", {"sheet_id": sheet["id"]})
+
+    assert pressed.status == 200, pressed.text
+    assert pressed.json()["waiters"] == 1
+    assert pressed.json()["sheet"]["id"] == sheet["id"]
+    woken = waiter.join()
+    assert woken["id"] == sheet["id"]
+    assert [c["text"] for c in woken["comments"]] == ["axis labels are too small"]
+    # Asking changed nothing on the sheet: the comment is still open.
+    assert desk.sheets()[0]["open_comments"] == 1
+
+
+def test_the_button_says_when_nobody_is_waiting(desk, figures):
+    fig, sheet = _sheet_with_svg(desk, figures)
+    _comment(desk, "add", sheet_id=sheet["id"], anchor=None, text="one")
+
+    pressed = desk.post("/api/feedback", {"sheet_id": sheet["id"]})
+
+    assert pressed.status == 200, pressed.text
+    assert pressed.json()["waiters"] == 0
+
+
+def test_a_wait_answers_with_no_sheet_once_its_time_is_up(desk, figures):
+    waiter = _Waiter(desk, timeout=1, under=str(figures))
+    assert waiter.join() is None
+
+
+def test_a_wait_is_scoped_the_way_desk_feedback_is(desk, figures, tmp_path):
+    """A directory wait hears only local sheets under it; a path wait hears
+    that sheet; an unscoped wait hears the whole desk."""
+    mine, sheet = _sheet_with_svg(desk, figures)
+    _comment(desk, "add", sheet_id=sheet["id"], anchor=None, text="mine")
+    elsewhere = tmp_path / "other-project" / "old.svg"
+    elsewhere.parent.mkdir()
+    elsewhere.write_text(SVG.format(color="green"))
+    other = desk.publish(elsewhere).json()["sheet"]
+    _comment(desk, "add", sheet_id=other["id"], anchor=None, text="someone else's")
+    sent = desk.send("alice-mac", ALICE_PATH, SVG.format(color="red").encode()).json()["sheet"]
+    _comment(desk, "add", sheet_id=sent["id"], anchor=None, text="a copy from alice")
+
+    under = _Waiter(desk, under=str(figures))
+    assert desk.post("/api/feedback", {"sheet_id": other["id"]}).json()["waiters"] == 0
+    assert desk.post("/api/feedback", {"sheet_id": sent["id"]}).json()["waiters"] == 0
+    assert desk.post("/api/feedback", {"sheet_id": sheet["id"]}).json()["waiters"] == 1
+    assert under.join()["id"] == sheet["id"]
+
+    by_path = _Waiter(desk, path=ALICE_PATH)
+    assert desk.post("/api/feedback", {"sheet_id": sheet["id"]}).json()["waiters"] == 0
+    assert desk.post("/api/feedback", {"sheet_id": sent["id"]}).json()["waiters"] == 1
+    assert by_path.join()["id"] == sent["id"]
+
+    everything = _Waiter(desk)
+    assert desk.post("/api/feedback", {"sheet_id": other["id"]}).json()["waiters"] == 1
+    assert everything.join()["id"] == other["id"]
+
+
+def test_a_wait_is_answered_once_and_every_waiter_in_scope_hears(desk, figures):
+    fig, sheet = _sheet_with_svg(desk, figures)
+    _comment(desk, "add", sheet_id=sheet["id"], anchor=None, text="one")
+    first = _Waiter(desk, under=str(figures))
+    second = _Waiter(desk, path=str(fig))
+
+    assert desk.post("/api/feedback", {"sheet_id": sheet["id"]}).json()["waiters"] == 2
+    assert first.join()["id"] == sheet["id"]
+    assert second.join()["id"] == sheet["id"]
+    # They were answered, so they are gone: the next press finds nobody.
+    assert desk.post("/api/feedback", {"sheet_id": sheet["id"]}).json()["waiters"] == 0
+
+
+@pytest.mark.parametrize("body", [{}, {"sheet_id": "nope"}, {"sheet_id": 7}])
+def test_asking_about_a_sheet_that_is_not_there_is_400(desk, body):
+    resp = desk.post("/api/feedback", body)
+    assert resp.status == 400
+    assert "no live sheet" in resp.json()["error"]
+
+
+def test_asking_about_a_sheet_with_nothing_open_or_in_the_trash_is_400(desk, figures):
+    fig, sheet = _sheet_with_svg(desk, figures)
+    nothing = desk.post("/api/feedback", {"sheet_id": sheet["id"]})
+    assert nothing.status == 400
+    assert "no open comments" in nothing.json()["error"]
+
+    _comment(desk, "add", sheet_id=sheet["id"], anchor=None, text="one")
+    desk.post("/api/trash", {"sheet_id": sheet["id"]})
+    trashed = desk.post("/api/feedback", {"sheet_id": sheet["id"]})
+    assert trashed.status == 400
+
+
+def test_desk_feedback_wait_reports_the_sheet_the_user_pressed_the_button_on(desk, figures):
+    fig, sheet = _sheet_with_svg(desk, figures)
+    _comment(desk, "add", sheet_id=sheet["id"], anchor={"x": 0.6, "y": 0.1, "w": 0.3, "h": 0.1}, text="legend overlaps")
+    runs = {}
+    thread = _threading.Thread(
+        target=lambda: runs.setdefault("proc", _feedback(desk, "--wait", "1", cwd=figures)), daemon=True
+    )
+    thread.start()
+    _time.sleep(2.0)  # the command has to reach the desk and start holding
+
+    assert desk.post("/api/feedback", {"sheet_id": sheet["id"]}).json()["waiters"] == 1
+    thread.join(timeout=30)
+
+    proc = runs["proc"]
+    assert proc.returncode == 0, proc.stderr
+    assert str(fig) in proc.stdout
+    assert "legend overlaps" in proc.stdout
+    assert "fractions: x 0.600–0.900" in proc.stdout
+
+
+def test_desk_feedback_wait_says_when_nobody_asked_and_exits_zero(desk, figures):
+    proc = _feedback(desk, "--wait", "0.02", cwd=figures)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == "waited 1.2 seconds and nobody asked for feedback"
+
+
+def test_desk_feedback_wait_with_a_path_hears_that_sheet_only(desk, figures):
+    fig, sheet = _sheet_with_svg(desk, figures)
+    _comment(desk, "add", sheet_id=sheet["id"], anchor=None, text="mine")
+    other_fig, other = _sheet_with_svg(desk, figures, name="hist.svg", color="blue")
+    _comment(desk, "add", sheet_id=other["id"], anchor=None, text="not mine")
+    runs = {}
+    thread = _threading.Thread(
+        target=lambda: runs.setdefault("proc", _feedback(desk, "--wait", "1", "--json", str(fig), cwd=figures)),
+        daemon=True,
+    )
+    thread.start()
+    _time.sleep(2.0)
+
+    assert desk.post("/api/feedback", {"sheet_id": other["id"]}).json()["waiters"] == 0
+    assert desk.post("/api/feedback", {"sheet_id": sheet["id"]}).json()["waiters"] == 1
+    thread.join(timeout=30)
+
+    proc = runs["proc"]
+    assert proc.returncode == 0, proc.stderr
+    report = _json.loads(proc.stdout)
+    assert [s["source_path"] for s in report["sheets"]] == [str(fig)]
+
+
+def test_desk_feedback_wait_ends_loudly_when_the_desk_stops(desk, figures):
+    runs = {}
+    thread = _threading.Thread(
+        target=lambda: runs.setdefault("proc", _feedback(desk, "--wait", "1", cwd=figures)), daemon=True
+    )
+    thread.start()
+    _time.sleep(2.0)
+
+    desk.stop()
+    thread.join(timeout=30)
+
+    proc = runs["proc"]
+    assert proc.returncode != 0
+    assert "stopped while waiting" in proc.stderr
+    desk.start()
+
+
+def test_desk_feedback_wait_then_hands_the_report_to_a_command(desk, figures, tmp_path):
+    """A harness that cannot hear a background command finish gets the report
+    handed to a command of its own, with the sheet's path in the environment."""
+    fig, sheet = _sheet_with_svg(desk, figures)
+    _comment(desk, "add", sheet_id=sheet["id"], anchor=None, text="title is wrong")
+    landed = tmp_path / "landed.txt"
+    then = f"cat > {landed}; echo \"$DESK_SHEET\" >> {landed}"
+    runs = {}
+    thread = _threading.Thread(
+        target=lambda: runs.setdefault("proc", _feedback(desk, "--wait", "1", "--then", then, cwd=figures)),
+        daemon=True,
+    )
+    thread.start()
+    _time.sleep(2.0)
+
+    assert desk.post("/api/feedback", {"sheet_id": sheet["id"]}).json()["waiters"] == 1
+    thread.join(timeout=30)
+
+    proc = runs["proc"]
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == "", "the report went to the command, not to stdout"
+    text = landed.read_text()
+    assert "title is wrong" in text
+    assert text.rstrip().endswith(str(fig))
+
+    # Nobody asked: the command does not run, and the one line is printed.
+    quiet = _feedback(desk, "--wait", "0.02", "--then", f"echo ran >> {landed}", cwd=figures)
+    assert quiet.returncode == 0
+    assert "nobody asked" in quiet.stdout
+    assert "ran" not in landed.read_text()

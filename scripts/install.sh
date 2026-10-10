@@ -197,6 +197,17 @@ for target_dir in $SKILL_DIRS; do
   echo "desk: skill     -> $target_dir"
   LINKED=$((LINKED + 1))
 done
+# pi has no background commands, so its ear for the feedback button is an
+# extension. Linked only where pi keeps extensions; pi loads .ts as is.
+PI_EXTENSIONS="${DESK_PI_EXTENSIONS:-$HOME/.pi/agent/extensions}"
+if [ -d "$PI_EXTENSIONS" ]; then
+  if [ -e "$PI_EXTENSIONS/desk-feedback.ts" ] && [ ! -L "$PI_EXTENSIONS/desk-feedback.ts" ]; then
+    echo "desk: NOTE — $PI_EXTENSIONS/desk-feedback.ts already exists and is not a link; leaving it alone." >&2
+  else
+    ln -sfn "$PROJECT/skill/pi/desk-feedback.ts" "$PI_EXTENSIONS/desk-feedback.ts"
+    echo "desk: pi ext    -> $PI_EXTENSIONS/desk-feedback.ts"
+  fi
+fi
 if [ "$LINKED" -eq 0 ]; then
   echo "desk: no agent skills directory found. Link it by hand once you have one:" >&2
   echo "desk:   ln -sfn $PROJECT/skill/desk ~/.claude/skills/desk" >&2

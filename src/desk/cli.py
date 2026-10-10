@@ -21,16 +21,21 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
 from desk.server import DEFAULT_PORT, resolve_host, tailscale_name
 from desk.store import ALLOWED_EXTENSIONS, FRAME_KINDS, check_origin, check_publishable
-from desk.store import PublishError, canonical_source_path
+from desk.store import PublishError, canonical_source_path, is_under
 
 #: How recently a file must have been touched to count as "produced in this
 #: session" when `/desk` is called with no argument.
 RECENT_SECONDS = 6 * 60 * 60
+#: How long `desk feedback --wait` holds by default. Under the longest a
+#: harness lets a background command run (Claude Code: two hours), so the
+#: agent hears "nobody asked" from the desk rather than a kill from the harness.
+DEFAULT_WAIT_MINUTES = 110.0
 
 SKIP_DIRS = {
     ".git", ".venv", "venv", "node_modules", "__pycache__", ".desk",
@@ -291,6 +296,11 @@ def cmd_feedback(args) -> int:
     come from the desk, and this command only turns fractions into pixels and
     a grid cell. It never starts the server — unlike `present`, there is
     nothing to do on a desk that is not running except say so.
+
+    `--wait` is the same report, later: it holds until the user presses the
+    feedback button on a sheet in scope, then prints that sheet and exits.
+    Waiting reads and nothing else — it never writes, resolves, or removes a
+    comment, and nothing reaches the agent until the user asks.
     """
     host, hostname, port = where()
     base = desk_base(host, port)
@@ -321,9 +331,22 @@ def cmd_feedback(args) -> int:
         # under this directory, whatever its spelling.
         sheets = [
             s for s in sheets
-            if s.get("origin") is None and _is_under(s["source_path"], scope)
+            if s.get("origin") is None and is_under(s["source_path"], scope)
         ]
     sheets = sorted(sheets, key=lambda s: s.get("updated_at", 0), reverse=True)
+
+    if args.wait is not None:
+        if args.path:
+            wait_scope = {"path": wanted}
+        elif scope is not None:
+            wait_scope = {"under": str(scope)}
+        else:
+            wait_scope = {}
+        sheet = wait_for_feedback(base, wait_scope, args.wait * 60)
+        if sheet is None:
+            print(f"waited {_minutes(args.wait)} and nobody asked for feedback")
+            return 0
+        sheets = [sheet]
 
     report = [feedback_for(sheet) for sheet in sheets]
     report = [r for r in report if r["comments"]]
@@ -331,24 +354,48 @@ def cmd_feedback(args) -> int:
         payload = {"desk": state["desk"], "sheets": report}
         if scope is not None:
             payload["under"] = str(scope)
-        print(json.dumps(payload, indent=2))
-        return 0
-    if not report:
+        text = json.dumps(payload, indent=2)
+    elif not report:
         if scope is not None:
-            print(f"no open feedback under {scope} (desk feedback --all for the whole desk)")
+            text = f"no open feedback under {scope} (desk feedback --all for the whole desk)"
         else:
-            print("no open feedback")
-        return 0
-    print("\n\n".join(format_feedback(r) for r in report))
+            text = "no open feedback"
+    else:
+        text = "\n\n".join(format_feedback(r) for r in report)
+    if args.then and report:
+        # A harness with no way to hear a background command finish gets the
+        # report handed to a command of its own: on stdin, with the sheet's
+        # path in the environment. The command is the harness's; this is not.
+        env = {**os.environ, "DESK_SHEET": report[0]["source_path"], "DESK_DESK": state["desk"]}
+        done = subprocess.run(args.then, shell=True, input=text + "\n", text=True, env=env)
+        return done.returncode
+    print(text)
     return 0
 
 
-def _is_under(source_path: str, root: Path) -> bool:
-    try:
-        Path(source_path).relative_to(root)
-        return True
-    except ValueError:
-        return False
+def wait_for_feedback(base: str, scope: dict, seconds: float) -> dict | None:
+    """Hold until the user asks for feedback on a sheet in `scope`, for at
+    most `seconds`. The desk answers each poll within a minute, so this asks
+    again until the deadline; a desk that stops mid-wait ends it, loudly."""
+    deadline = time.monotonic() + seconds
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
+        query = urllib.parse.urlencode({**scope, "timeout": f"{min(remaining, 60):.3f}"})
+        try:
+            with urllib.request.urlopen(base + "/api/feedback/wait?" + query, timeout=90) as response:
+                sheet = json.load(response)["sheet"]
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            raise SystemExit(f"desk: stopped while waiting for feedback: {exc}")
+        if sheet is not None:
+            return sheet
+
+
+def _minutes(minutes: float) -> str:
+    if minutes < 1:
+        return f"{minutes * 60:g} seconds"
+    return f"{minutes:g} minute" + ("" if minutes == 1 else "s")
 
 
 def feedback_path(path: str, directory: str | None) -> str:
@@ -552,6 +599,27 @@ def main(argv=None) -> int:
         help="the directory to resolve a relative path from (default: $DESK_CWD, then the cwd)",
     )
     feedback.add_argument("--json", action="store_true", help="print the report as one JSON object")
+    feedback.add_argument(
+        "--wait",
+        nargs="?",
+        const=DEFAULT_WAIT_MINUTES,
+        default=None,
+        type=float,
+        metavar="MINUTES",
+        help=(
+            "hold until the user presses the feedback button on a sheet in scope, then report "
+            f"that sheet; give up after MINUTES (default {DEFAULT_WAIT_MINUTES:g})"
+        ),
+    )
+    feedback.add_argument(
+        "--then",
+        metavar="COMMAND",
+        default=None,
+        help=(
+            "instead of printing, hand the report to this shell command on stdin, with the sheet's "
+            "path in $DESK_SHEET; for a harness that cannot hear a background command finish"
+        ),
+    )
     feedback.set_defaults(func=cmd_feedback)
 
     sub.add_parser("status", help="report where the desk is and what is on it").set_defaults(func=cmd_status)

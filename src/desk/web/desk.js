@@ -1269,6 +1269,7 @@ function applyFullscreenView() {
 }
 
 function closeFullscreen() {
+  feedbackNote.hidden = true;
   cancelComment();
   closePopover();
   fullscreenEl.hidden = true;
@@ -1375,9 +1376,71 @@ function changeInPlace(sheet) {
   if (fullscreenId === sheet.id) renderPins(sheet);
 }
 
+/* The feedback button is how the user asks the agent to read the comments,
+   without leaving the page. The browser cannot reach the agent's chat, so
+   the click does two things: it copies the command the user would have
+   typed, and it tells the desk, which wakes any `desk feedback --wait` in
+   scope. The note says which of the two actually happened. Nothing here
+   changes a comment. */
+const feedbackBtn = $('fullscreen-feedback');
+const feedbackNote = $('feedback-note');
+let feedbackNoteTimer = null;
+
+/** Only a local sheet with open comments can be asked about: a sent sheet's
+ *  script is on another machine, and no comments is nothing to read. */
+function setFeedbackButton(sheet) {
+  feedbackBtn.hidden = !!sheet.origin;
+  feedbackBtn.disabled = !(sheet.open_comments > 0);
+}
+
+function copyText(text) {
+  // The desk is plain HTTP on the tailnet, which is not a secure context,
+  // so the clipboard API may be missing; the old selection route still works.
+  if (navigator.clipboard && window.isSecureContext) {
+    return navigator.clipboard.writeText(text).then(() => true, () => false);
+  }
+  const area = document.createElement('textarea');
+  area.value = text;
+  area.setAttribute('readonly', '');
+  area.style.position = 'fixed';
+  area.style.opacity = '0';
+  document.body.appendChild(area);
+  area.select();
+  let copied = false;
+  try { copied = document.execCommand('copy'); } catch (err) { copied = false; }
+  area.remove();
+  return Promise.resolve(copied);
+}
+
+function showFeedbackNote(text) {
+  feedbackNote.textContent = text;
+  feedbackNote.hidden = false;
+  clearTimeout(feedbackNoteTimer);
+  feedbackNoteTimer = setTimeout(() => { feedbackNote.hidden = true; }, 6000);
+}
+
+async function requestFeedback() {
+  const sheet = fullscreenSheet();
+  if (!sheet || sheet.origin || !(sheet.open_comments > 0)) return;
+  const command = 'desk feedback ' + sheet.source_path;
+  const copied = await copyText(command);
+  try {
+    const { waiters } = await apiPost('/api/feedback', { sheet_id: sheet.id });
+    if (waiters > 0) showFeedbackNote('sent to your agent');
+    else if (copied) showFeedbackNote('no agent is waiting — copied the command, paste it in the chat');
+    else showFeedbackNote('no agent is waiting — run: ' + command);
+  } catch (err) {
+    console.error('feedback', err);
+    showFeedbackNote(String(err.message || err));
+  }
+}
+
+feedbackBtn.addEventListener('click', requestFeedback);
+
 /** Draw every open pin for the sheet under the lamp. Anchored comments go on
  *  the figure; sheet-level ones line up in the bar. */
 function renderPins(sheet) {
+  setFeedbackButton(sheet);
   pinsLayer.textContent = '';
   pinsInBar.textContent = '';
   if (pendingPin) pinsLayer.appendChild(pendingPin);

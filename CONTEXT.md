@@ -27,8 +27,10 @@ the trash, and a restart. Only the user writes one.
 
 **Feedback** — the open comments on a sheet, read back by the agent with
 `desk feedback`: where each one is, in fractions, in pixels, and in words,
-and what it says. Feedback reaches the agent only when the user asks for it.
-Resolved comments are not feedback.
+and what it says. Feedback reaches the agent only when the user asks for it:
+by typing `/desk feedback`, or by pressing **feedback** on the sheet, which
+wakes an agent holding `desk feedback --wait`. Resolved comments are not
+feedback.
 
 **Store** — the desk's own copy of every published file. Publishing copies the
 file in. The desk never reads the user's original file at render time, so

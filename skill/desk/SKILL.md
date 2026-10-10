@@ -62,6 +62,40 @@ Run exactly that command and act on it (below) **before doing anything else**.
 The user put those comments there for you; presenting over them without
 reading them is ignoring the user.
 
+### After presenting: listen for the feedback button
+
+The sheet has a **feedback** button. When the user presses it, the desk wakes
+whoever is holding `desk feedback --wait` on that sheet, and the report comes
+to you without the user coming back to the terminal. So after every
+successful `desk present` (not `--to`), start listening, the way your harness
+can:
+
+- **Claude Code** — run `desk feedback --wait <the path present printed>`
+  as a background Bash command with a timeout of 7200000 (two hours). When
+  it returns a report, act on it (below). When it returns `waited ... and
+  nobody asked for feedback`, say nothing and do not start it again; the
+  button then copies the command for the user to paste.
+- **Codex** (`$CODEX_THREAD_ID` is set) — Codex does not hear a background
+  command finish, so hand the report to a queued message instead, detached
+  from the turn:
+  ```
+  nohup desk feedback --wait <path> --then 'codex queue --thread "$CODEX_THREAD_ID" --message "The user pressed feedback on the desk. Run: desk feedback $DESK_SHEET, and act on it as the desk skill says."' >/dev/null 2>&1 &
+  ```
+- **Antigravity** (`$ANTIGRAVITY_CONVERSATION_ID` is set) — the same shape,
+  through its agent API:
+  ```
+  nohup desk feedback --wait <path> --then 'agy agentapi send-message "$ANTIGRAVITY_CONVERSATION_ID" "The user pressed feedback on the desk. Run: desk feedback $DESK_SHEET, and act on it as the desk skill says."' >/dev/null 2>&1 &
+  ```
+- **pi** — nothing to do: the `desk-feedback` extension listens for the
+  whole session, and the report arrives as a message.
+
+`--wait` reads and nothing else. It holds for 110 minutes at most, answers
+within a second of the button, and exits nonzero if the desk stops. `--then
+COMMAND` runs the command with the report on stdin and the sheet's path in
+`$DESK_SHEET`, only when someone asked. A report that arrives this way is the
+same as the user typing `/desk feedback <path>`: read it and act on it, by
+number, before anything else.
+
 ### Presenting once is enough
 
 The desk **watches** every path it has been given. Re-running the plotting
@@ -85,6 +119,7 @@ desk feedback             # the figures you put up from here, newest first
 desk feedback <path>      # that one sheet
 desk feedback --all       # every sheet on the desk with open comments
 desk feedback --json      # the same, as one object, if you would rather parse it
+desk feedback --wait <path>   # hold until the user presses feedback on it, then the same
 ```
 
 The desk holds many figures at once, from many sessions, and the comments

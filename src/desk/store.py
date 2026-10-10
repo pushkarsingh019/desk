@@ -63,6 +63,16 @@ class CommentError(ValueError):
     """A comment the desk cannot make, resolve, or remove as asked."""
 
 
+def is_under(source_path: str, root) -> bool:
+    """Whether `source_path` lies under the directory `root`, by spelling only:
+    nothing here touches the filesystem."""
+    try:
+        Path(source_path).relative_to(Path(root))
+        return True
+    except ValueError:
+        return False
+
+
 def sheet_id_for(source_path: str, origin: str | None = None) -> str:
     """Sheet identity: the absolute source path on the machine the file lives on.
 

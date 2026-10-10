@@ -73,6 +73,7 @@ up.
 | click a pile | fan it open; click again to collapse |
 | double-click a sheet | fullscreen, with its own pan and zoom |
 | in fullscreen, **comment** or `c`, then drag a rectangle or click a point | pin a comment there; type, `Enter` saves, `Esc` cancels |
+| in fullscreen, **feedback** | ask the agent that made the figure to read its comments; if none is listening, the command is copied for you to paste |
 | in fullscreen, click a pin | read the comment; **resolve** it when it is dealt with, or **remove** it |
 | `×` on a sheet, or drag it to the trash zone | throw it away |
 | click a sheet, then `Delete` (or `Backspace`) | throw it away |
