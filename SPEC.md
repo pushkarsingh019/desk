@@ -248,8 +248,10 @@ Who listens is the harness's business and lives in the skill, not the
 server: an agent whose harness wakes it when a background command exits runs
 the wait itself after every `desk present`; one whose harness cannot hands
 the report to a command of its own with `--then`, which pushes a prompt into
-the session the harness's way. Waiting reads and nothing else. What stays
-cut: the desk learning which session presented a sheet, which the scope rule
+the session the harness's way. Waiting reads and nothing else, and it is
+the one thing here the agent starts on its own: the wait is the agent's to
+hold, the ask is the user's to make, and nothing arrives until they do.
+What stays cut: the desk learning which session presented a sheet, which the scope rule
 makes unnecessary, and any channel by which the desk reaches an agent that
 is not already listening.
 
