@@ -1575,6 +1575,10 @@ function showPopover(commentId, at) {
   const comment = sheet && (sheet.comments || []).find((c) => c.id === commentId);
   if (!comment) return;
   openCommentId = commentId;
+  // Only the open pin shows its outline when it was made on an older version.
+  for (const el of pinsLayer.querySelectorAll('.pin.open')) el.classList.remove('open');
+  const pin = at.closest('.pin');
+  if (pin) pin.classList.add('open');
   const hollow = comment.version !== sheet.version;
   $('comment-popover-head').textContent =
     '#' + comment.number + ' · ' +
@@ -1594,6 +1598,7 @@ function showPopover(commentId, at) {
 
 function closePopover() {
   openCommentId = null;
+  for (const el of pinsLayer.querySelectorAll('.pin.open')) el.classList.remove('open');
   popoverEl.hidden = true;
 }
 

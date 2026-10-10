@@ -192,9 +192,10 @@ whole sheet being no anchor at all; nothing the browser measured is stored,
 so a pin lands on the same spot of a new version, and a comment made on a
 sheet sent from elsewhere stays here. Iframe kinds take sheet-level comments
 only: an iframe eats pointer events and has no stable natural size. A new
-version resolves nothing — a pin made on an older version is drawn hollow
-with its version number, and when that version is evicted the comment still
-names it. Every add, resolve, and remove emits `sheet.changed` carrying the
+version resolves nothing — a pin made on an older version is cut down to its
+hollow label with its version number, showing its outline only while its
+popover is open, and when that version is evicted the comment still names
+it. Every add, resolve, and remove emits `sheet.changed` carrying the
 sheet and no layout, so every open page redraws its pins and nothing can
 move. The pins themselves are the one accepted exception to "nothing paints
 over a figure": small numbered circles and a thin outline, in fullscreen

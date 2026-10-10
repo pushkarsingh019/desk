@@ -942,6 +942,9 @@ body.stale #mug-body { animation: mug-alarm 3s ease-in-out infinite; }
   box-shadow: 0 0 0 calc(1px * var(--pin-scale)) var(--pin-halo);
 }
 .pin.hollow.rect { border-style: dashed; }
+/* An older-version rectangle keeps its box, so the label does not move, but
+   draws its outline only while its popover is open. */
+.pin.hollow.rect:not(.open) { border-color: transparent; box-shadow: none; }
 .pin.pending.rect { border-style: dashed; box-shadow: none; }
 
 /* The numbered circle, at the rectangle's top-left corner or on the point. */
@@ -968,7 +971,7 @@ body.stale #mug-body { animation: mug-alarm 3s ease-in-out infinite; }
 }
 .pin-label:hover { background: var(--pin); filter: brightness(1.15); }
 .pin-label:active { transform: translate(-50%, -50%) scale(var(--pin-scale)); }
-/* A pin made on an older version is hollow and says which. */
+/* A pin made on an older version is demoted to a hollow label that says which. */
 .pin.hollow .pin-label,
 .pin-label.hollow {
   background: var(--pin-hollow);
