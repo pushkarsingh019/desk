@@ -2451,6 +2451,61 @@ def test_the_feedback_button_wakes_an_agent_waiting_under_that_directory(desk, f
     assert desk.sheets()[0]["open_comments"] == 1
 
 
+def test_a_download_is_the_published_bytes_under_the_files_own_name(desk, figures):
+    fig, sheet = _sheet_with_svg(desk, figures, name="scatter.svg")
+
+    resp = desk.get(sheet["download_url"])
+
+    assert resp.status == 200, resp.text
+    assert resp.body == fig.read_bytes()
+    assert "image/svg+xml" in resp.headers["Content-Type"]
+    assert resp.headers["Content-Disposition"].startswith('attachment; filename="scatter.svg"')
+
+
+def test_a_download_of_a_png_is_byte_identical(desk, figures):
+    fig = figures / "heat.png"
+    fig.write_bytes(PNG)
+    sheet = desk.publish(fig).json()["sheet"]
+
+    resp = desk.get(sheet["download_url"])
+
+    assert resp.body == PNG
+    assert "image/png" in resp.headers["Content-Type"]
+
+
+def test_a_markdown_download_is_the_markdown_not_the_rendered_page(desk, figures):
+    fig = figures / "notes.md"
+    fig.write_text("# Findings\n\n- the fit is good\n")
+    sheet = desk.publish(fig).json()["sheet"]
+
+    resp = desk.get(sheet["download_url"])
+
+    assert resp.body == fig.read_bytes()
+    assert "text/markdown" in resp.headers["Content-Type"]
+    assert "<h1" not in resp.text
+
+
+def test_a_download_names_a_version_so_an_older_one_can_still_be_taken(desk, figures):
+    fig, first = _sheet_with_svg(desk, figures, color="red")
+    fig.write_text(SVG.format(color="blue"))
+    second = desk.publish(fig).json()["sheet"]
+
+    assert desk.get(second["download_url"]).text == SVG.format(color="blue")
+    assert desk.get(f"/api/content/main/{first['id']}/1?download").text == SVG.format(color="red")
+    assert desk.get(f"/api/content/main/{first['id']}/9?download").status == 404
+
+
+def test_a_download_keeps_a_name_the_header_cannot_spell(desk, figures):
+    fig, sheet = _sheet_with_svg(desk, figures, name="résumé plot.svg")
+
+    resp = desk.get(sheet["download_url"])
+
+    assert resp.status == 200, resp.text
+    disposition = resp.headers["Content-Disposition"]
+    assert disposition.startswith("attachment;")
+    assert "filename*=UTF-8''r%C3%A9sum%C3%A9%20plot.svg" in disposition
+
+
 def test_the_button_says_when_nobody_is_waiting(desk, figures):
     fig, sheet = _sheet_with_svg(desk, figures)
     _comment(desk, "add", sheet_id=sheet["id"], anchor=None, text="one")

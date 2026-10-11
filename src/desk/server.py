@@ -351,6 +351,9 @@ class Desk:
             # a versioned URL is cached forever, so the same path on two desks
             # must never share one.
             "content_url": f"/api/content/{quote(self.name, safe='')}/{sheet['id']}/{latest}",
+            # The same bytes, served as a file: the store's copy, exactly as
+            # it was published, under the name it was published from.
+            "download_url": f"/api/content/{quote(self.name, safe='')}/{sheet['id']}/{latest}?download",
             "created_at": sheet["created_at"],
             "updated_at": sheet["updated_at"],
             "trashed": sheet["trashed"],
@@ -413,6 +416,20 @@ class Desk:
             except UnicodeDecodeError as exc:
                 data = render.unreadable_page("This HTML file is not valid UTF-8", str(exc))
         return data, content_type
+
+    def download(self, sheet_id: str, version: int | None) -> tuple[bytes, str, str]:
+        """The stored bytes untouched, with the name they were published under.
+
+        `content` renders markdown and swaps an unreadable file for a visible
+        error, because those are for showing. A download is the user taking
+        the store's copy back, so it gets exactly what was published.
+        """
+        data, content_type = self.store.content(sheet_id, version)
+        sheet = self.store.get(sheet_id)
+        if sheet and sheet["kind"] == "md":
+            content_type = "text/markdown; charset=utf-8"
+        name = Path(sheet["source_path"]).name if sheet else sheet_id
+        return data, content_type, name
 
 
 #: What a desk may be called: something that survives a URL and a directory
@@ -584,6 +601,9 @@ class Desks:
     def content(self, desk_name: str, sheet_id: str, version: int | None):
         return self.get(desk_name).content(sheet_id, version)
 
+    def download(self, desk_name: str, sheet_id: str, version: int | None):
+        return self.get(desk_name).download(sheet_id, version)
+
     # -- lifetime ---------------------------------------------------------
 
     def start(self) -> None:
@@ -602,6 +622,17 @@ def _in_scope(sheet: dict, scope: dict) -> bool:
     if "under" in scope:
         return sheet["origin"] is None and is_under(sheet["source_path"], scope["under"])
     return True
+
+
+def _attachment(name: str) -> str:
+    """A Content-Disposition that keeps the file's name, whatever it is.
+
+    Headers travel as latin-1 and a line break would end one, so the plain
+    `filename` is an ASCII fallback and the real name goes in `filename*`,
+    percent-encoded as RFC 6266 spells it. A browser takes the second.
+    """
+    fallback = "".join(c for c in name if 32 <= ord(c) < 127 and c not in '"\\') or "sheet"
+    return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(name, safe='')}"
 
 
 def _desk_name(name) -> str:
@@ -755,7 +786,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/feedback/wait":
                 return self._wait_for_feedback(parse_qs(urlparse(self.path).query))
             if path.startswith("/api/content/"):
-                return self._content(path)
+                return self._content(path, parse_qs(urlparse(self.path).query, keep_blank_values=True))
             if path.startswith("/api/"):
                 return self._error(404, f"no such endpoint: {path}")
             return self._static(path)
@@ -855,8 +886,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(400, f"desks needs an op of create, switch or remove, not {op!r}")
         return self._json(200, ops[op](body.get("name")))
 
-    def _content(self, path: str):
-        # /api/content/<desk>/<sheet id>[/<version>]
+    def _content(self, path: str, query: dict):
+        # /api/content/<desk>/<sheet id>[/<version>][?download]
         parts = [part for part in path[len("/api/content/") :].split("/") if part]
         if len(parts) < 2:
             return self._error(404, "no content for that sheet")
@@ -867,15 +898,20 @@ class Handler(BaseHTTPRequestHandler):
                 version = int(parts[2])
             except ValueError:
                 return self._error(404, f"sheet {sheet_id!r} has no version {parts[2]!r}")
+        extra = {}
         try:
-            data, content_type = self.desks.content(desk_name, sheet_id, version)
+            if "download" in query:
+                data, content_type, name = self.desks.download(desk_name, sheet_id, version)
+                extra["Content-Disposition"] = _attachment(name)
+            else:
+                data, content_type = self.desks.content(desk_name, sheet_id, version)
         except (KeyError, OSError):
             return self._error(404, f"no content for sheet {sheet_id!r} on desk {desk_name!r}")
         # A named version's content never changes, so it may be cached hard: a
         # new version arrives at a new URL. The unversioned URL follows the
         # sheet, so caching it would freeze a sheet on an old picture forever.
-        cache = "public, max-age=31536000, immutable" if version is not None else "no-store"
-        self._send(200, data, content_type, extra={"Cache-Control": cache})
+        extra["Cache-Control"] = "public, max-age=31536000, immutable" if version is not None else "no-store"
+        self._send(200, data, content_type, extra=extra)
 
     def _wait_for_feedback(self, query: dict):
         """Long poll: answer when the user asks for feedback in scope, or with

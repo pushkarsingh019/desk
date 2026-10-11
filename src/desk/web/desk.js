@@ -1437,6 +1437,22 @@ async function requestFeedback() {
 
 feedbackBtn.addEventListener('click', requestFeedback);
 
+/* The download button hands the user the store's copy of the sheet under the
+   lamp: the bytes exactly as they were published, under the file's own name.
+   The URL is read at click time, so a version arriving while the view is
+   open downloads what is on screen. It shows for every sheet, sent ones
+   included — a copy is precisely what the user wants to take away. */
+$('fullscreen-download').addEventListener('click', () => {
+  const sheet = fullscreenSheet();
+  if (!sheet) return;
+  const link = document.createElement('a');
+  link.href = sheet.download_url;
+  link.download = sheet.name;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+});
+
 /** Draw every open pin for the sheet under the lamp. Anchored comments go on
  *  the figure; sheet-level ones line up in the bar. */
 function renderPins(sheet) {

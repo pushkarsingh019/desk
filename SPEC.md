@@ -92,6 +92,7 @@ agent iterates.
 43. As a scientist, I want to pin a comment on a figure — on a region, a point, or the whole sheet — and see it stay there through new versions until I resolve it, so that what I think is wrong with a plot is recorded where it is wrong, not in a chat I will scroll away from.
 44. As a scientist, I want to type `/desk feedback` and have the agent read my comments back — where each one is, in terms it can act on — fix the plotting code, and re-run it so the sheet updates under my comments, so that critiquing a figure is pointing at it rather than describing it, and the fix lands where I am already looking.
 45. As a scientist, I want a **feedback** button on the sheet I am looking at, so that once my comments are pinned the agent that made the figure starts on them without my going back to the terminal to say so.
+46. As a scientist, I want a **download** button on the sheet I am looking at that gives me the file exactly as it was published — the real SVG, PNG, or PDF, not a screenshot — so that the figure I approved on the desk is the one that goes into the slide or the manuscript.
 
 ## Implementation Decisions
 
@@ -254,6 +255,17 @@ hold, the ask is the user's to make, and nothing arrives until they do.
 What stays cut: the desk learning which session presented a sheet, which the scope rule
 makes unnecessary, and any channel by which the desk reaches an agent that
 is not already listening.
+
+**Download is the store's copy, untouched.** Story 46. The store already
+holds every published file byte for byte; the download button hands that
+copy back under the file's own name, through the versioned content URL
+with `?download`, which answers with `Content-Disposition: attachment`.
+Nothing is rendered or resampled on the way out: markdown comes back as
+markdown, not as the page the sheet shows, and an unreadable file comes
+back as its own bytes, not the error page. It shows on every sheet, sent
+ones included — a copy is what the user wants to take away. Fullscreen
+shows the latest version, so that is what downloads; the version-stepping
+UI stays cut.
 
 **Trash tombstones the path.** A trashed path stops being watched and will not
 be re-created by a subsequent file change. An explicit `/desk` on that path
