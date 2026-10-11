@@ -51,12 +51,17 @@ point at it. Double-click the sheet, press `c`, and drag a rectangle (or
 click a point) on the spot; type a few words; `Enter`. Then type `/desk
 feedback` and the agent reads your comments back with where each one is, in
 pixels and in words, fixes the plotting code, and re-runs it so the sheet
-updates under your pins. Look, and **resolve** what is fixed — the agent never
-does; it cannot write, resolve, or remove a comment. A `/desk` on a sheet with
-open comments tells the agent to read them first. A desk holds many figures,
+starts a new version. Select the earlier version to review and **resolve**
+its comments — the agent cannot write, resolve, or remove them. A desk holds many figures,
 so bare `/desk feedback` covers the ones made from the directory the agent is
 working in, newest first; `--all` is the whole desk. The same thing from a
 shell is `desk feedback [path] [--all] [--json]`.
+
+**Versions.** Each version shows only its own open comments. In fullscreen,
+use the version selector to revisit older figures and their comments.
+**Start new version** copies the stored figure into a fresh version with no
+comments; earlier comments remain on their original versions, without being
+resolved or deleted. Agent feedback covers the latest version.
 
 **Export.** Resolved comments stay on the sheet, and the version each was
 made on and resolved on stays in the store. `desk export [path] [--all]

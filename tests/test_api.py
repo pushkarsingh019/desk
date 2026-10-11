@@ -1864,7 +1864,7 @@ def test_a_comment_is_stamped_with_the_version_current_when_it_was_made(desk, fi
     assert back["comments"][0]["version"] == 2
 
 
-def test_a_new_version_resolves_nothing_and_the_pin_stays_where_it_was(desk, figures):
+def test_a_new_version_keeps_old_comments_but_starts_with_no_open_comments(desk, figures):
     fig, sheet = _sheet_with_svg(desk, figures)
     _comment(desk, "add", sheet_id=sheet["id"], anchor={"x": 0.25, "y": 0.25, "w": 0.5, "h": 0.5}, text="centre")
 
@@ -1875,8 +1875,9 @@ def test_a_new_version_resolves_nothing_and_the_pin_stays_where_it_was(desk, fig
 
     [back] = desk.sheets()
     assert back["version"] == 2
-    assert back["open_comments"] == 1
+    assert back["open_comments"] == 0
     [comment] = back["comments"]
+    assert comment["resolved_at"] is None
     assert comment["version"] == 1
     assert comment["anchor"] == {"x": 0.25, "y": 0.25, "w": 0.5, "h": 0.5}
     assert event["sheet"]["comments"][0]["version"] == 1
@@ -2228,7 +2229,7 @@ def test_desk_feedback_converts_svg_fractions_against_the_viewbox(desk, figures)
     assert "pixels on v1: x 230–346, y 86–259" in text
 
 
-def test_desk_feedback_gives_pixels_against_the_commented_version_while_it_is_retained(desk, figures):
+def test_desk_feedback_omits_comments_from_older_versions(desk, figures):
     raster = figures / "raster.png"
     raster.write_bytes(png(100, 100))
     sid = desk.publish(raster).json()["sheet"]["id"]
@@ -2237,21 +2238,15 @@ def test_desk_feedback_gives_pixels_against_the_commented_version_while_it_is_re
     desk.publish(raster)
 
     proc = _feedback(desk, "--json", cwd=figures)
-    [sheet] = _json.loads(proc.stdout)["sheets"]
-    [comment] = sheet["comments"]
-
-    assert sheet["version"] == 2
-    assert comment["version"] == 1
-    assert comment["retained"] is True
-    assert comment["pixels"] == {"x": 100, "y": 150, "w": 100, "h": 150}
-    assert comment["pixels_on_version"] == {"x": 50, "y": 50, "w": 50, "h": 50}
-    text = _feedback(desk, cwd=figures).stdout
-    assert "#1  on v1 — lower right" in text
-    assert "pixels on v2: x 100–200, y 150–300 (of 200×300)" in text
-    assert "pixels on v1: x 50–100, y 50–100" in text
+    assert proc.returncode == 0, proc.stderr
+    assert _json.loads(proc.stdout)["sheets"] == []
+    [sheet] = desk.sheets()
+    assert sheet["comments"][0]["version"] == 1
+    assert sheet["comments"][0]["resolved_at"] is None
+    assert desk.get(sheet["history"][0]["content_url"]).body == png(100, 100)
 
 
-def test_desk_feedback_says_when_the_commented_version_is_no_longer_retained(desk, figures):
+def test_desk_feedback_omits_legacy_comments_whose_version_is_no_longer_retained(desk, figures):
     raster = figures / "raster.png"
     raster.write_bytes(png(100, 100))
     sid = desk.publish(raster).json()["sheet"]["id"]
@@ -2263,15 +2258,10 @@ def test_desk_feedback_says_when_the_commented_version_is_no_longer_retained(des
     _forget_version(desk, sid, 1)
     desk.start()
 
-    proc = _feedback(desk, cwd=figures)
-
+    proc = _feedback(desk, "--json", cwd=figures)
     assert proc.returncode == 0, proc.stderr
-    assert "#1  on v1, no longer retained — upper left" in proc.stdout
-    assert "pixels on v2: x 0–100, y 0–100 (of 200×200)" in proc.stdout
-    assert "pixels on v1" not in proc.stdout
-    [sheet] = _json.loads(_feedback(desk, "--json", cwd=figures).stdout)["sheets"]
-    assert sheet["comments"][0]["retained"] is False
-    assert sheet["comments"][0]["pixels_on_version"] is None
+    assert _json.loads(proc.stdout)["sheets"] == []
+    assert desk.sheets()[0]["comments"][0]["version"] == 1
 
 
 def test_desk_feedback_still_reports_fractions_when_the_size_cannot_be_read(desk, figures):
@@ -2408,7 +2398,7 @@ def test_desk_feedback_never_starts_the_server(free_port, tmp_path):
     assert not (tmp_path / "never").exists()
 
 
-def test_desk_present_says_when_the_sheet_it_presented_has_open_comments(desk, figures):
+def test_desk_present_starts_fresh_without_old_comment_feedback(desk, figures):
     fig = figures / "fit.svg"
     fig.write_text(SVG.format(color="red"))
     sid = desk.publish(fig).json()["sheet"]["id"]
@@ -2424,8 +2414,9 @@ def test_desk_present_says_when_the_sheet_it_presented_has_open_comments(desk, f
 
     assert loud.returncode == 0, loud.stderr
     lines = loud.stdout.strip().splitlines()
-    assert len(lines) == 3
-    assert lines[2] == f"2 open comments on this sheet — run: desk feedback {fig}"
+    assert len(lines) == 2
+    assert desk.sheets()[0]["open_comments"] == 0
+    assert len(desk.sheets()[0]["comments"]) == 2
 
 
 def test_desk_present_to_never_mentions_the_recipients_comments(desk, figures, free_port):
@@ -2915,3 +2906,43 @@ def test_desk_export_never_starts_the_server(free_port, tmp_path):
     assert "nothing to export" in proc.stderr
     assert _closed(free_port)
     assert not (tmp_path / "never").exists()
+
+
+def test_start_new_version_keeps_figure_and_old_comments_without_resolving(desk, figures):
+    fig, sheet = _sheet_with_svg(desk, figures)
+    sid = sheet["id"]
+    _comment(desk, "add", sheet_id=sid, anchor=None, text="old")
+    original = desk.sheets()[0]["comments"]
+    content = desk.get(sheet["content_url"]).body
+    layout = desk.state()["layout"]
+    fig.unlink()  # The button uses the store, not the original file.
+    with desk.events() as stream:
+        response = desk.post("/api/version", {"sheet_id": sid, "version": 1})
+        assert response.status == 200, response.text
+        event = stream.await_event("sheet.version")
+    back = response.json()["sheet"]
+    assert back["version"] == event["sheet"]["version"] == 2
+    assert back["comments"] == original
+    assert back["open_comments"] == 0
+    assert desk.get(back["content_url"]).body == content
+    assert desk.state()["layout"] == layout
+    _comment(desk, "add", sheet_id=sid, version=2, anchor=None, text="new")
+    _comment(desk, "add", sheet_id=sid, version=1, anchor=None, text="historical")
+    old_id = original[0]["id"]
+    response = _comment(desk, "resolve", sheet_id=sid, comment_id=old_id, version=1)
+    assert response.status == 200
+    back = response.json()["sheet"]
+    assert back["comments"][0]["resolved_version"] == 1
+    assert back["comments"][2]["version"] == 1
+    assert back["open_comments"] == 1
+    for version in (1, None, True, "2"):
+        assert desk.post("/api/version", {"sheet_id": sid, "version": version}).status == 400
+    assert desk.sheets()[0]["version"] == 2
+    for version in (999, True, "1"):
+        assert _comment(desk, "add", sheet_id=sid, version=version, anchor=None, text="bad").status == 400
+        assert _comment(desk, "resolve", sheet_id=sid, comment_id=old_id, version=version).status == 400
+    desk.restart()
+    assert desk.sheets()[0]["comments"] == back["comments"]
+    assert desk.post("/api/version", {"sheet_id": "ghost", "version": 2}).status == 400
+    desk.post("/api/trash", {"sheet_id": sid})
+    assert desk.post("/api/version", {"sheet_id": sid, "version": 2}).status == 400

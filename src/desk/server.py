@@ -155,6 +155,9 @@ class Desk:
         sheet = self.store.publish(source_path)
         return self._land(sheet)
 
+    def start_version(self, sheet_id, version) -> dict:
+        return self._land(self.store.start_version(sheet_id, version))
+
     def receive(self, origin, source_path, data: bytes) -> dict:
         """A file sent from another machine. Lands like any other publish."""
         sheet = self.store.receive(origin, source_path, data)
@@ -271,10 +274,10 @@ class Desk:
         """
         if op == "add":
             sheet = self.store.add_comment(
-                params.get("sheet_id"), params.get("anchor"), params.get("text")
+                params.get("sheet_id"), params.get("anchor"), params.get("text"), params.get("version")
             )
         elif op == "resolve":
-            sheet = self.store.resolve_comment(params.get("sheet_id"), params.get("comment_id"))
+            sheet = self.store.resolve_comment(params.get("sheet_id"), params.get("comment_id"), params.get("version"))
         elif op == "remove":
             sheet = self.store.remove_comment(params.get("sheet_id"), params.get("comment_id"))
         else:
@@ -360,6 +363,8 @@ class Desk:
             "history": [
                 {
                     "n": v["n"],
+                    "kind": Path(v["file"]).suffix.lstrip("."),
+                    "natural_size": self.store.natural_size(sheet["id"], v["n"]),
                     "sha256": v.get("sha256"),
                     "bytes": v.get("bytes"),
                     "created_at": v.get("created_at"),
@@ -374,7 +379,7 @@ class Desk:
             # the page and the `desk` command never have to measure anything.
             "natural_size": self.store.natural_size(sheet["id"]),
             "comments": comments,
-            "open_comments": sum(1 for c in comments if c["resolved_at"] is None),
+            "open_comments": sum(1 for c in comments if c["resolved_at"] is None and c["version"] == latest),
         }
 
     def comment_json(self, sheet: dict, comment: dict, number: int) -> dict:
@@ -833,6 +838,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._restore(body)
             if path == "/api/clear":
                 return self._json(200, {"trashed": self.desk.clear()})
+            if path == "/api/version":
+                return self._json(200, {"sheet": self.desk.start_version(body.get("sheet_id"), body.get("version"))})
             if path == "/api/comments":
                 return self._json(200, {"sheet": self.desk.comment(body.get("op"), body)})
             if path == "/api/feedback":

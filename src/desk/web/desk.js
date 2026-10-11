@@ -713,6 +713,7 @@ function renderTrash() {
 /** A sheet gained a version. Swap its pixels and paint a ring. Nothing else. */
 function swapInPlace(sheet) {
   const previous = sheetsById.get(sheet.id);
+  if (fullscreenId === sheet.id && fullscreenVersion === null && commentInProgress() && previous) fullscreenVersion = previous.version;
   if (previous) Object.assign(previous, sheet);
   else {
     state.sheets.push(sheet);
@@ -737,9 +738,7 @@ function swapInPlace(sheet) {
   const pileId = pileOf(sheet.id);
   if (pileId) ring(nodes.get('pile:' + pileId));
   if (fullscreenId === sheet.id) {
-    fillFullscreen(sheet, { keepView: true });
-    // The pins are fractions, so they stay put; a pin made on the version
-    // that just went turns hollow.
+    fillFullscreen(fullscreenSheet(), { keepView: true });
     renderPins(sheet);
   }
 }
@@ -1174,6 +1173,9 @@ const fullscreenStage = $('fullscreen-stage');
 const fullscreenHolder = $('fullscreen-holder');
 const pinsLayer = $('fullscreen-pins');
 let fullscreenId = null;
+// null follows the latest revision; a number holds a historical revision.
+let fullscreenVersion = null;
+let startingVersion = false;
 let fullscreenView = { x: 0, y: 0, scale: 1 };
 let naturalSize = { w: 1200, h: 900 };
 
@@ -1191,6 +1193,7 @@ function openFullscreen(id) {
   cancelComment();
   closePopover();
   fullscreenId = id;
+  fullscreenVersion = null;
   $('fullscreen-name').textContent = whereFrom(sheet);
   fullscreenEl.hidden = false;
   fillFullscreen(sheet, { keepView: false });
@@ -1353,8 +1356,43 @@ function commentInProgress() {
 }
 
 function fullscreenSheet() {
-  return fullscreenId === null ? null : sheetsById.get(fullscreenId) || null;
+  const sheet = fullscreenId === null ? null : sheetsById.get(fullscreenId);
+  if (!sheet) return null;
+  if (fullscreenVersion === null) return sheet;
+  const record = (sheet.history || []).find((v) => v.n === fullscreenVersion);
+  if (!record) { fullscreenVersion = null; return sheet; }
+  return { ...sheet, version: record.n, kind: record.kind, natural_size: record.natural_size,
+    content_url: record.content_url, download_url: record.content_url + '?download',
+    open_comments: (sheet.comments || []).filter((c) => c.version === record.n && c.resolved_at === null).length };
 }
+
+const versionSelect = $('fullscreen-version');
+const newVersionBtn = $('fullscreen-new-version');
+versionSelect.addEventListener('change', () => {
+  cancelComment();
+  closePopover();
+  const latest = sheetsById.get(fullscreenId);
+  fullscreenVersion = Number(versionSelect.value) === latest.version ? null : Number(versionSelect.value);
+  const sheet = fullscreenSheet();
+  fillFullscreen(sheet, { keepView: false });
+  renderPins(sheet);
+});
+newVersionBtn.addEventListener('click', async () => {
+  const sheet = fullscreenSheet();
+  if (!sheet || fullscreenVersion !== null || startingVersion || commentInProgress()) return;
+  startingVersion = true;
+  newVersionBtn.disabled = true;
+  try {
+    const result = await apiPost('/api/version', { sheet_id: sheet.id, version: sheet.version });
+    swapInPlace(result.sheet);
+  } catch (err) {
+    showFeedbackNote(String(err.message || err));
+    await refresh();
+  } finally {
+    startingVersion = false;
+    if (fullscreenSheet()) renderPins(fullscreenSheet());
+  }
+});
 
 function setCommentBadge(el, sheet) {
   const badge = el.querySelector('.sheet-comments');
@@ -1389,7 +1427,7 @@ let feedbackNoteTimer = null;
 /** Only a local sheet with open comments can be asked about: a sent sheet's
  *  script is on another machine, and no comments is nothing to read. */
 function setFeedbackButton(sheet) {
-  feedbackBtn.hidden = !!sheet.origin;
+  feedbackBtn.hidden = !!sheet.origin || fullscreenVersion !== null;
   feedbackBtn.disabled = !(sheet.open_comments > 0);
 }
 
@@ -1421,7 +1459,7 @@ function showFeedbackNote(text) {
 
 async function requestFeedback() {
   const sheet = fullscreenSheet();
-  if (!sheet || sheet.origin || !(sheet.open_comments > 0)) return;
+  if (!sheet || sheet.origin || fullscreenVersion !== null || !(sheet.open_comments > 0)) return;
   const command = 'desk feedback ' + sheet.source_path;
   const copied = await copyText(command);
   try {
@@ -1456,12 +1494,22 @@ $('fullscreen-download').addEventListener('click', () => {
 /** Draw every open pin for the sheet under the lamp. Anchored comments go on
  *  the figure; sheet-level ones line up in the bar. */
 function renderPins(sheet) {
+  sheet = fullscreenSheet() || sheet;
+  versionSelect.textContent = '';
+  for (const record of sheet.history || []) {
+    const option = document.createElement('option');
+    option.value = record.n;
+    option.textContent = 'v' + record.n;
+    option.selected = record.n === sheet.version;
+    versionSelect.appendChild(option);
+  }
+  newVersionBtn.disabled = startingVersion || fullscreenVersion !== null || commentInProgress();
   setFeedbackButton(sheet);
   pinsLayer.textContent = '';
   pinsInBar.textContent = '';
   if (pendingPin) pinsLayer.appendChild(pendingPin);
   for (const comment of sheet.comments || []) {
-    if (comment.resolved_at !== null) continue;
+    if (comment.resolved_at !== null || comment.version !== sheet.version) continue;
     const hollow = comment.version !== sheet.version;
     const label = document.createElement('button');
     label.className = 'pin-label';
@@ -1520,6 +1568,7 @@ function armComment() {
   fullscreenEl.classList.toggle('commenting', commentMode);
   commentBtn.classList.toggle('armed', commentMode);
   commentHint.hidden = !commentMode;
+  newVersionBtn.disabled = startingVersion || fullscreenVersion !== null || commentMode;
 }
 
 commentBtn.addEventListener('click', armComment);
@@ -1579,6 +1628,7 @@ function openEditor(anchor) {
   }
   editorHint.textContent = anchor ? EDITOR_HINT : 'On the whole sheet · ' + EDITOR_HINT;
   editorEl.hidden = false;
+  newVersionBtn.disabled = true;
   positionEditor();
   editorText.focus();
 }
@@ -1616,6 +1666,7 @@ function cancelComment() {
   commentHint.hidden = true;
   commentBtn.classList.remove('armed');
   fullscreenEl.classList.remove('commenting');
+  newVersionBtn.disabled = startingVersion || fullscreenVersion !== null;
 }
 
 async function saveComment() {
@@ -1625,6 +1676,7 @@ async function saveComment() {
     const { sheet } = await apiPost('/api/comments', {
       op: 'add',
       sheet_id: fullscreenId,
+      version: fullscreenSheet().version,
       anchor: pendingAnchor,
       text,
     });
@@ -1683,7 +1735,7 @@ function closePopover() {
 
 async function commentOp(op) {
   if (openCommentId === null || fullscreenId === null) return;
-  const params = { op, sheet_id: fullscreenId, comment_id: openCommentId };
+  const params = { op, sheet_id: fullscreenId, comment_id: openCommentId, version: fullscreenSheet().version };
   closePopover();
   try {
     const { sheet } = await apiPost('/api/comments', params);

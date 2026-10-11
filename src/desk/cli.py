@@ -587,7 +587,7 @@ def feedback_path(path: str, directory: str | None) -> str:
 
 def feedback_for(sheet: dict) -> dict:
     """One sheet's open comments, each with where it is in every useful term."""
-    comments = [c for c in sheet.get("comments", []) if c.get("resolved_at") is None]
+    comments = [c for c in sheet.get("comments", []) if c.get("resolved_at") is None and c["version"] == sheet["version"]]
     return {
         "source_path": sheet["source_path"],
         "name": sheet["name"],

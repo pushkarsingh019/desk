@@ -536,28 +536,50 @@ class Store:
             key = (sheet_id, record["n"])
             if key in self._sizes:
                 return dict(self._sizes[key]) if self._sizes[key] else None
-            if sheet["kind"] not in ANCHOR_KINDS:
+            if Path(record["file"]).suffix.lstrip(".") not in ANCHOR_KINDS:
                 size = None
             else:
                 try:
                     data = (self.content_root / sheet_id / record["file"]).read_bytes()
                 except OSError:
                     return None
-                size = natural_size(sheet["kind"], data)
+                size = natural_size(Path(record["file"]).suffix.lstrip("."), data)
             self._sizes[key] = size
             return dict(size) if size else None
 
     # -- comments ---------------------------------------------------------
 
-    def add_comment(self, sheet_id: str, anchor, text) -> dict:
-        """Pin a comment on a sheet, stamped with the sheet's current version."""
+    def start_version(self, sheet_id: str, version) -> dict:
+        """Start fresh from the stored latest figure, without changing comments."""
+        with self._lock:
+            sheet = self._live(sheet_id)
+            latest = sheet["versions"][-1]
+            if type(version) is not int or version != latest["n"]:
+                raise CommentError("the sheet changed; refresh before starting a new version")
+            data = (self.content_root / sheet_id / latest["file"]).read_bytes()
+            return self._record(sheet["source_path"], sheet.get("origin"), sheet["kind"], data, explicit=True)
+
+    def _viewed_version(self, sheet: dict, version):
+        if version is None:
+            return sheet["versions"][-1]
+        if type(version) is not int:
+            raise CommentError("version must be a retained version number")
+        for record in sheet["versions"]:
+            if record["n"] == version:
+                return record
+        raise CommentError("that version is no longer retained")
+
+    def add_comment(self, sheet_id: str, anchor, text, version=None) -> dict:
+        """Pin a comment on the viewed version (latest for legacy clients)."""
         text = check_text(text)
         anchor = check_anchor(anchor)
         with self._lock:
             sheet = self._live(sheet_id)
-            if anchor is not None and sheet["kind"] not in ANCHOR_KINDS:
+            viewed = self._viewed_version(sheet, version)
+            kind = Path(viewed["file"]).suffix.lstrip(".")
+            if anchor is not None and kind not in ANCHOR_KINDS:
                 raise CommentError(
-                    f"a .{sheet['kind']} sheet takes sheet-level comments only "
+                    f"a .{kind} sheet takes sheet-level comments only "
                     f"(no anchor): an iframe has no stable natural size"
                 )
             taken = {c["id"] for c in sheet["comments"]}
@@ -567,7 +589,7 @@ class Store:
             sheet["comments"].append(
                 {
                     "id": cid,
-                    "version": sheet["versions"][-1]["n"],
+                    "version": viewed["n"],
                     "anchor": anchor,
                     "text": text,
                     "created_at": time.time(),
@@ -579,14 +601,15 @@ class Store:
             self._save()
             return dict(sheet)
 
-    def resolve_comment(self, sheet_id: str, comment_id) -> dict:
+    def resolve_comment(self, sheet_id: str, comment_id, version=None) -> dict:
         with self._lock:
             sheet = self._live(sheet_id)
             comment = self._comment(sheet, comment_id)
+            viewed = self._viewed_version(sheet, version)
             if comment["resolved_at"] is None:
                 comment["resolved_at"] = time.time()
                 # What the user was looking at when they said it was met.
-                comment["resolved_version"] = sheet["versions"][-1]["n"]
+                comment["resolved_version"] = viewed["n"]
                 sheet["updated_at"] = time.time()
                 self._save()
             return dict(sheet)

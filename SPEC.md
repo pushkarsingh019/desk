@@ -195,9 +195,14 @@ whole sheet being no anchor at all; nothing the browser measured is stored,
 so a pin lands on the same spot of a new version, and a comment made on a
 sheet sent from elsewhere stays here. Iframe kinds take sheet-level comments
 only: an iframe eats pointer events and has no stable natural size. A new
-version resolves nothing — a pin made on an older version is cut down to its
-hollow label with its version number, showing its outline only while its
-popover is open. A version a comment names is not evicted while the comment
+version resolves nothing and starts with a clean comment view: only open
+comments made on the viewed version show as pins. The fullscreen version
+selector revisits retained figure revisions and their comments. **Start new
+version** copies the latest stored figure into a fresh revision, keeping all
+comments on their original versions; it rejects a stale latest-version number.
+Adding and resolving from the page names the version being viewed. Badges
+and agent feedback count only open comments on the latest version.
+A version a comment names is not evicted while the comment
 exists (story 47); one evicted before that rule, the comment still names.
 Every add, resolve, and remove emits `sheet.changed` carrying the
 sheet and no layout, so every open page redraws its pins and nothing can

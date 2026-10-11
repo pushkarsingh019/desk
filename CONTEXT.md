@@ -23,7 +23,7 @@ on, and the version it was resolved on.
 **Comment** — a note the user pins on a sheet, in the fullscreen view: on a
 rectangle, on a point, or on the whole sheet. It is a record on the sheet,
 not layout, and it names the version it was made on. A comment is **open**
-until the user resolves it; it rides with the sheet through new versions,
+until the user resolves it; it belongs to its original version and rides with the sheet through new versions,
 the trash, and a restart. Only the user writes one.
 
 **Feedback** — the open comments on a sheet, read back by the agent with
