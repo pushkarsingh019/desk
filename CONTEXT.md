@@ -17,7 +17,8 @@ and trashes.
 
 **Version** — one revision of a sheet's content. Publishing the same source path
 again appends a version; it never creates a second sheet. The last 20 are
-retained.
+retained, and so is any older one a comment names: the version it was made
+on, and the version it was resolved on.
 
 **Comment** — a note the user pins on a sheet, in the fullscreen view: on a
 rectangle, on a point, or on the whole sheet. It is a record on the sheet,
@@ -94,8 +95,13 @@ Every desk stays watched whether or not it is current; switching changes
 where the next sheet lands and what is on screen, and nothing else.
 
 **Resolve** — what the *user* does to a comment that has been dealt with. The
-comment stays on the sheet, closed. Only the user resolves, and only the user
-removes; the agent never does either.
+comment stays on the sheet, closed, naming the version that was on screen.
+Only the user resolves, and only the user removes; the agent never does either.
+
+**Export** — what the *user* does with `desk export` to take a sheet's
+comments, open and resolved, and its retained versions off the desk as a
+directory another agent can read without it. A read: it never changes the
+desk, and nothing in it is written by an agent.
 
 ## Load-bearing rules
 

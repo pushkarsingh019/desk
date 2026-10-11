@@ -93,6 +93,7 @@ agent iterates.
 44. As a scientist, I want to type `/desk feedback` and have the agent read my comments back — where each one is, in terms it can act on — fix the plotting code, and re-run it so the sheet updates under my comments, so that critiquing a figure is pointing at it rather than describing it, and the fix lands where I am already looking.
 45. As a scientist, I want a **feedback** button on the sheet I am looking at, so that once my comments are pinned the agent that made the figure starts on them without my going back to the terminal to say so.
 46. As a scientist, I want a **download** button on the sheet I am looking at that gives me the file exactly as it was published — the real SVG, PNG, or PDF, not a screenshot — so that the figure I approved on the desk is the one that goes into the slide or the manuscript.
+47. As a scientist, I want to type `desk export` and get a directory holding every comment I ever pinned on my figures, open and resolved, with the figure as it was when I pinned each one and as it was when I resolved it, so that what I said about a hundred plots is a record I can hand to a different agent to learn from, or distil into a skill, rather than something that evaporated with the chat.
 
 ## Implementation Decisions
 
@@ -128,7 +129,7 @@ dropped: it existed only for iPad Safari, mobile is out of scope, and the
 - *Store* — owns the content store and sheet records. Publishing copies the file
   in (never references it in place) and appends a version. Owns trash,
   tombstones, and the comments on a sheet. Retains the last 20 versions per
-  sheet; no UI exposes them yet.
+  sheet, plus any older one a comment names; no UI exposes them.
 - *Layout* — owns desk state: position, size, z-order, pile membership, inbox
   membership, home viewport. Pure state transitions, persisted as JSON.
 - *Watcher* — watches source paths that have been published at least once,
@@ -196,8 +197,9 @@ sheet sent from elsewhere stays here. Iframe kinds take sheet-level comments
 only: an iframe eats pointer events and has no stable natural size. A new
 version resolves nothing — a pin made on an older version is cut down to its
 hollow label with its version number, showing its outline only while its
-popover is open, and when that version is evicted the comment still names
-it. Every add, resolve, and remove emits `sheet.changed` carrying the
+popover is open. A version a comment names is not evicted while the comment
+exists (story 47); one evicted before that rule, the comment still names.
+Every add, resolve, and remove emits `sheet.changed` carrying the
 sheet and no layout, so every open page redraws its pins and nothing can
 move. The pins themselves are the one accepted exception to "nothing paints
 over a figure": small numbered circles and a thin outline, in fullscreen
@@ -266,6 +268,32 @@ back as its own bytes, not the error page. It shows on every sheet, sent
 ones included — a copy is what the user wants to take away. Fullscreen
 shows the latest version, so that is what downloads; the version-stepping
 UI stays cut.
+
+**Export is the user's record of the critique, off the desk.** Story 47.
+Comments are the only thing on the desk that are a judgement rather than a
+picture, and given enough of them they are a dataset: what one person
+pointed at, what they said, and what the figure looked like before and
+after. `desk export [path] [--all] [--out DIR]` writes that to a directory
+another agent can open without the desk: a `manifest.json`, the retained
+version files byte for byte, and a one-page `README.md` that says how to
+read it. It has the scope of `desk feedback`, exports every comment, open
+and resolved — resolved ones being the interesting half of a record — and,
+like `feedback`, it reads through the API, never starts the server, and
+never writes to the desk. Two things in the store make the record whole.
+`resolve` stamps the version on screen onto the comment as
+`resolved_version`, the way `add` stamps `version`, so a resolved comment
+reads as "on v*a* I pointed here and said this; by v*b* it was met." And a
+version a comment names, made on or resolved on, is kept past the cap of
+20: the cap exists to bound disk, a commented version is bounded by the
+user's hand, and without this a session of twenty fixes evicts the
+"before" picture before anyone thinks to export. The manifest never claims
+a file it does not have: a version named by a comment from before this rule
+is listed with `retained: false`. What is not in the bundle is the agent's
+half — the change to the plotting code between the two versions — which
+was never on the desk; that lives in whatever ran the agent. What stays
+cut: agent-authored text, a channel from the bundle back into the desk,
+and the version-stepping UI. The `/desk` skill does not mention export; it
+is the user's command, not part of the loop.
 
 **Trash tombstones the path.** A trashed path stops being watched and will not
 be re-created by a subsequent file change. An explicit `/desk` on that path

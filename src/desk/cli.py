@@ -8,6 +8,11 @@ a present that did not happen is never reported as one that did.
 `desk feedback` reads the user's open comments back, with where each one is
 in terms an agent can act on. It never starts the server: feedback is read,
 not made, and a desk that is not running has none.
+
+`desk export` writes a sheet's comments, open and resolved, and its retained
+versions to a directory another agent can open without the desk: the record
+of what the user said about a figure and what it looked like before and
+after. A read, like `feedback`.
 """
 
 from __future__ import annotations
@@ -16,6 +21,7 @@ import argparse
 import base64
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -302,38 +308,8 @@ def cmd_feedback(args) -> int:
     Waiting reads and nothing else — it never writes, resolves, or removes a
     comment, and nothing reaches the agent until the user asks.
     """
-    host, hostname, port = where()
-    base = desk_base(host, port)
-    if not port_open(host, port):
-        raise SystemExit(f"desk: not running on {host}:{port}, so there is no feedback to read")
-    try:
-        with urllib.request.urlopen(base + "/api/state", timeout=10) as response:
-            state = json.load(response)
-    except (urllib.error.URLError, OSError, ValueError) as exc:
-        raise SystemExit(f"desk: could not reach the desk at {base}: {exc}")
-
-    # Live sheets only: a trashed sheet's comments are in the trash with it.
-    sheets = state["sheets"]
-    scope = None
-    if args.path:
-        wanted = feedback_path(args.path, args.directory)
-        # A local sheet first; a sent sheet with the same path there second.
-        matches = sorted(
-            (s for s in sheets if s["source_path"] == wanted),
-            key=lambda s: s.get("origin") is not None,
-        )
-        if not matches:
-            raise SystemExit(f"desk: {wanted} is not a sheet on the desk {state['desk']!r}")
-        sheets = matches[:1]
-    elif not args.all:
-        scope = search_root(args.directory)
-        # A sent sheet's path names a file on another machine, so it is never
-        # under this directory, whatever its spelling.
-        sheets = [
-            s for s in sheets
-            if s.get("origin") is None and is_under(s["source_path"], scope)
-        ]
-    sheets = sorted(sheets, key=lambda s: s.get("updated_at", 0), reverse=True)
+    base, state = running_desk("so there is no feedback to read")
+    sheets, scope, wanted = sheets_in_scope(state, args.path, args.all, args.directory)
 
     if args.wait is not None:
         if args.path:
@@ -371,6 +347,207 @@ def cmd_feedback(args) -> int:
         return done.returncode
     print(text)
     return 0
+
+
+def running_desk(or_else: str) -> tuple[str, dict]:
+    """The desk's base URL and its state, for a command that only reads.
+
+    Never starts the server: unlike `present`, there is nothing to do on a
+    desk that is not running except say so."""
+    host, hostname, port = where()
+    base = desk_base(host, port)
+    if not port_open(host, port):
+        raise SystemExit(f"desk: not running on {host}:{port}, {or_else}")
+    try:
+        with urllib.request.urlopen(base + "/api/state", timeout=10) as response:
+            state = json.load(response)
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        raise SystemExit(f"desk: could not reach the desk at {base}: {exc}")
+    return base, state
+
+
+def sheets_in_scope(state: dict, path, everything: bool, directory) -> tuple[list, Path | None, str | None]:
+    """The sheets a read-only command is about, newest first.
+
+    A path is one sheet. Otherwise the scope is the directory the agent is
+    working in — a desk holds many sheets at once, and the ones the user is
+    commenting on are the ones this agent just made — or, with `--all`, the
+    whole current desk. Live sheets only: a trashed sheet's comments are in
+    the trash with it. Returns the sheets, the directory when that is the
+    scope, and the path when one was given."""
+    sheets = state["sheets"]
+    scope = None
+    wanted = None
+    if path:
+        wanted = feedback_path(path, directory)
+        # A local sheet first; a sent sheet with the same path there second.
+        matches = sorted(
+            (s for s in sheets if s["source_path"] == wanted),
+            key=lambda s: s.get("origin") is not None,
+        )
+        if not matches:
+            raise SystemExit(f"desk: {wanted} is not a sheet on the desk {state['desk']!r}")
+        sheets = matches[:1]
+    elif not everything:
+        scope = search_root(directory)
+        # A sent sheet's path names a file on another machine, so it is never
+        # under this directory, whatever its spelling.
+        sheets = [
+            s for s in sheets
+            if s.get("origin") is None and is_under(s["source_path"], scope)
+        ]
+    sheets = sorted(sheets, key=lambda s: s.get("updated_at", 0), reverse=True)
+    return sheets, scope, wanted
+
+
+#: The manifest format. Bump when a reader of an old bundle would misread a new one.
+EXPORT_SCHEMA = 1
+
+
+def cmd_export(args) -> int:
+    """Write the comments and retained versions of the sheets in scope to a
+    directory another agent can open without the desk.
+
+    Every comment, open and resolved — resolved ones are the interesting
+    half of a record of critique — with the version it was made on and the
+    version it was resolved on, and the retained version files byte for
+    byte. The manifest never claims a file it does not have: a version a
+    comment names that has been evicted is listed with `retained: false`.
+
+    A read, like `feedback`: never starts the server, never writes to the desk.
+    """
+    base, state = running_desk("so there is nothing to export")
+    sheets, scope, _ = sheets_in_scope(state, args.path, args.all, args.directory)
+    sheets = [s for s in sheets if s.get("comments")]
+    if not sheets:
+        if scope is not None:
+            print(f"nothing to export under {scope} (desk export --all for the whole desk)")
+        else:
+            print("nothing to export")
+        return 0
+
+    out = Path(args.out).expanduser() if args.out else None
+    if out is None:
+        out = search_root(args.directory) / time.strftime("desk-export-%Y%m%d-%H%M%S")
+    elif not out.is_absolute():
+        out = search_root(args.directory) / out
+    if out.exists() and (not out.is_dir() or any(out.iterdir())):
+        raise SystemExit(f"desk: {out} exists and is not empty; export into a new or empty directory")
+    out.mkdir(parents=True, exist_ok=True)
+
+    manifest = {
+        "schema": EXPORT_SCHEMA,
+        "desk": state["desk"],
+        "exported_at": time.time(),
+        "sheets": [],
+    }
+    if scope is not None:
+        manifest["under"] = str(scope)
+    files = 0
+    for index, sheet in enumerate(sheets, start=1):
+        stem = Path(sheet["name"]).stem or "sheet"
+        rel_dir = Path("sheets") / f"{index:02d}-{stem}"
+        (out / rel_dir).mkdir(parents=True, exist_ok=True)
+        retained = {v["n"]: v for v in sheet.get("history", [])}
+        named = {c["version"] for c in sheet["comments"]}
+        named |= {c["resolved_version"] for c in sheet["comments"] if c.get("resolved_version")}
+        versions = []
+        for n in sorted(set(retained) | named):
+            record = retained.get(n)
+            if record is None:
+                versions.append(
+                    {"n": n, "sha256": None, "bytes": None, "created_at": None, "retained": False, "file": None}
+                )
+                continue
+            rel_file = rel_dir / f"v{n}.{sheet['kind']}"
+            fetch(base + record["content_url"], out / rel_file)
+            files += 1
+            versions.append(
+                {
+                    "n": n,
+                    "sha256": record.get("sha256"),
+                    "bytes": record.get("bytes"),
+                    "created_at": record.get("created_at"),
+                    "retained": True,
+                    "file": rel_file.as_posix(),
+                }
+            )
+        manifest["sheets"].append(
+            {
+                "source_path": sheet["source_path"],
+                "origin": sheet.get("origin"),
+                "kind": sheet["kind"],
+                "name": sheet["name"],
+                "dir": rel_dir.as_posix(),
+                "natural_size": sheet.get("natural_size"),
+                "versions": versions,
+                "comments": [
+                    {
+                        "id": c["id"],
+                        "number": c["number"],
+                        "version": c["version"],
+                        "resolved_version": c.get("resolved_version"),
+                        "anchor": c["anchor"],
+                        "location": location_of(c["anchor"]),
+                        "pixels_on_version": pixels_of(c["anchor"], c.get("natural_size")),
+                        "text": c["text"],
+                        "created_at": c["created_at"],
+                        "resolved_at": c["resolved_at"],
+                    }
+                    for c in sheet["comments"]
+                ],
+            }
+        )
+    (out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    (out / "README.md").write_text(EXPORT_README)
+    comments = sum(len(s["comments"]) for s in manifest["sheets"])
+    print(
+        f"{out}\n{_count(len(manifest['sheets']), 'sheet')}, {_count(comments, 'comment')}, "
+        f"{_count(files, 'version file')}"
+    )
+    return 0
+
+
+def fetch(url: str, dest: Path) -> None:
+    """The store's copy of one version, untouched, to a file."""
+    try:
+        with urllib.request.urlopen(url, timeout=30) as response, open(dest, "wb") as sink:
+            shutil.copyfileobj(response, sink)
+    except (urllib.error.URLError, OSError) as exc:
+        raise SystemExit(f"desk: could not fetch {url}: {exc}")
+
+
+EXPORT_README = """\
+# A desk export
+
+What one person said about some figures, and what the figures looked like
+when they said it. Written by `desk export`; nothing here needs the desk to
+read.
+
+`manifest.json` lists the sheets. A **sheet** is one figure, identified by
+its `source_path` on the machine it was made on (`origin` names that
+machine when it was not the exporting one). Each sheet has:
+
+- `versions` — every revision this export knows about, oldest first.
+  `file` is the path of its bytes relative to this directory, exactly as the
+  figure was published; `retained: false` with `file: null` means the desk
+  no longer has that revision and only a comment still names it.
+- `comments` — every comment the user pinned on the sheet, in the order made,
+  open and resolved alike. `version` is the revision it was made on;
+  `resolved_version` is the revision on screen when the user resolved it,
+  or null while it is open (or when it was resolved before the desk recorded
+  this). `anchor` is where, as a rectangle in fractions `0..1` of the
+  figure's natural box — `w` and `h` of 0 is a point, null is the whole
+  sheet — and `pixels_on_version` is the same against the pixel size of
+  the version it was made on, when that could be read. `location` is a
+  coarse word for the spot. `text` is what the user said.
+
+Only the user writes a comment, and only the user resolves one. A resolved
+comment on version *a* with `resolved_version` *b* reads: the user pointed
+at this spot on v*a* and said this; by v*b* it was met. The agent's
+side — what was changed in the plotting code between the two — was never on
+the desk and is not here.
+"""
 
 
 def wait_for_feedback(base: str, scope: dict, seconds: float) -> dict | None:
@@ -621,6 +798,31 @@ def main(argv=None) -> int:
         ),
     )
     feedback.set_defaults(func=cmd_feedback)
+
+    export = sub.add_parser(
+        "export", help="write the comments and versions of sheets to a directory another agent can read"
+    )
+    export.add_argument(
+        "path",
+        nargs="?",
+        help="one sheet's figure (default: every commented sheet from this directory, newest first)",
+    )
+    export.add_argument(
+        "--all", action="store_true", help="every commented sheet on the desk, not only this directory's"
+    )
+    export.add_argument(
+        "--in",
+        dest="directory",
+        default=None,
+        help="the directory to resolve from (default: $DESK_CWD, then the cwd)",
+    )
+    export.add_argument(
+        "--out",
+        metavar="DIR",
+        default=None,
+        help="where to write the bundle (default: desk-export-<timestamp> in that directory); must be new or empty",
+    )
+    export.set_defaults(func=cmd_export)
 
     sub.add_parser("status", help="report where the desk is and what is on it").set_defaults(func=cmd_status)
 

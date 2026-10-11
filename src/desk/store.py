@@ -29,7 +29,8 @@ from pathlib import Path
 #: A file may reach the desk only if its extension is on this list.
 ALLOWED_EXTENSIONS = {".svg", ".png", ".pdf", ".html", ".md"}
 
-#: Versions retained per sheet. The 21st evicts the oldest.
+#: Versions retained per sheet. The 21st evicts the oldest — unless a
+#: comment names it (see `_evict`).
 MAX_VERSIONS = 20
 
 CONTENT_TYPES = {
@@ -452,11 +453,25 @@ class Store:
             return dict(sheet)
 
     def _evict(self, sheet: dict) -> None:
-        while len(sheet["versions"]) > MAX_VERSIONS:
-            oldest = sheet["versions"].pop(0)
-            stale = self.content_root / sheet["id"] / oldest["file"]
+        """Keep the last MAX_VERSIONS versions, and any older one a comment
+        names: the version it was made on, or the one it was resolved on.
+
+        The cap exists to bound disk, and a commented version is bounded by
+        the user's hand, so the cap holds in spirit. What it buys is that the
+        picture a comment was made about, and the picture it was resolved
+        on, are still there to export however many versions came after."""
+        named = {c["version"] for c in sheet["comments"]}
+        named |= {c["resolved_version"] for c in sheet["comments"] if c.get("resolved_version")}
+        keep_from = max(0, len(sheet["versions"]) - MAX_VERSIONS)
+        kept = []
+        for i, version in enumerate(sheet["versions"]):
+            if i >= keep_from or version["n"] in named:
+                kept.append(version)
+                continue
+            stale = self.content_root / sheet["id"] / version["file"]
             stale.unlink(missing_ok=True)
-            self._sizes.pop((sheet["id"], oldest["n"]), None)
+            self._sizes.pop((sheet["id"], version["n"]), None)
+        sheet["versions"] = kept
 
     # -- reading ----------------------------------------------------------
 
@@ -557,6 +572,7 @@ class Store:
                     "text": text,
                     "created_at": time.time(),
                     "resolved_at": None,
+                    "resolved_version": None,
                 }
             )
             sheet["updated_at"] = time.time()
@@ -569,6 +585,8 @@ class Store:
             comment = self._comment(sheet, comment_id)
             if comment["resolved_at"] is None:
                 comment["resolved_at"] = time.time()
+                # What the user was looking at when they said it was met.
+                comment["resolved_version"] = sheet["versions"][-1]["n"]
                 sheet["updated_at"] = time.time()
                 self._save()
             return dict(sheet)
@@ -578,6 +596,8 @@ class Store:
             sheet = self._live(sheet_id)
             comment = self._comment(sheet, comment_id)
             sheet["comments"].remove(comment)
+            # A version only this comment named is no longer held past the cap.
+            self._evict(sheet)
             sheet["updated_at"] = time.time()
             self._save()
             return dict(sheet)
@@ -688,6 +708,10 @@ def _readable_comment(record) -> dict | None:
         return None
     created = record.get("created_at")
     ok = isinstance(created, (int, float)) and not isinstance(created, bool)
+    # Stamped on resolve since ticket 21; a comment resolved before that has none.
+    on = record.get("resolved_version")
+    if isinstance(on, bool) or not isinstance(on, int) or on < 1 or resolved is None:
+        on = None
     return {
         "id": record["id"],
         "version": version,
@@ -695,4 +719,5 @@ def _readable_comment(record) -> dict | None:
         "text": record["text"],
         "created_at": float(created) if ok else 0.0,
         "resolved_at": float(resolved) if resolved is not None else None,
+        "resolved_version": on,
     }

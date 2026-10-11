@@ -90,8 +90,9 @@ desk status
 ```
 
 Prints the URL, the sheet counts, the data directory, and the log path. (The
-other commands are `desk present [path] [--to machine]` and `desk feedback
-[path] [--all] [--json]`; `desk --help` lists them.) If the
+other commands are `desk present [path] [--to machine]`, `desk feedback
+[path] [--all] [--json]`, and `desk export [path] [--all] [--out DIR]`;
+`desk --help` lists them.) If the
 shell cannot find `desk`, call `~/.local/bin/desk` and tell the user their PATH
 is missing `~/.local/bin`.
 

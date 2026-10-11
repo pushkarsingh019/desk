@@ -354,6 +354,19 @@ class Desk:
             # The same bytes, served as a file: the store's copy, exactly as
             # it was published, under the name it was published from.
             "download_url": f"/api/content/{quote(self.name, safe='')}/{sheet['id']}/{latest}?download",
+            # One record per retained version, for `desk export`: what the
+            # store knows about each, and where its bytes are. `versions`
+            # keeps its shape, a list of numbers, for everything that reads it.
+            "history": [
+                {
+                    "n": v["n"],
+                    "sha256": v.get("sha256"),
+                    "bytes": v.get("bytes"),
+                    "created_at": v.get("created_at"),
+                    "content_url": f"/api/content/{quote(self.name, safe='')}/{sheet['id']}/{v['n']}",
+                }
+                for v in sheet["versions"]
+            ],
             "created_at": sheet["created_at"],
             "updated_at": sheet["updated_at"],
             "trashed": sheet["trashed"],

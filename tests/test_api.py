@@ -953,6 +953,7 @@ def test_desk_status_says_when_the_desk_is_not_running(free_port, tmp_path):
 
 # --- adversarial: malformed input, damaged data, path identity ------------
 
+import hashlib as _hashlib  # noqa: E402
 import json as _json  # noqa: E402
 import os as _os  # noqa: E402
 import socket as _socket  # noqa: E402
@@ -1846,7 +1847,7 @@ def test_a_comment_is_a_record_on_the_sheet_not_layout(desk, figures):
     index = _json.loads((desk.desk_dir / "sheets.json").read_text())
     [record] = index["sheets"]
     [stored] = record["comments"]
-    assert set(stored) == {"id", "version", "anchor", "text", "created_at", "resolved_at"}
+    assert set(stored) == {"id", "version", "anchor", "text", "created_at", "resolved_at", "resolved_version"}
     assert stored["anchor"] is None
     assert "comments" not in _json.dumps(before)
 
@@ -1895,7 +1896,7 @@ def test_comments_survive_trash_and_restore_and_a_restart(desk, figures):
     assert back["open_comments"] == 1
 
 
-def test_a_comment_outlives_the_eviction_of_the_version_it_was_made_on(desk, figures):
+def test_a_comment_keeps_the_version_it_was_made_on_past_the_cap(desk, figures):
     fig, sheet = _sheet_with_svg(desk, figures)
     _comment(desk, "add", sheet_id=sheet["id"], anchor={"x": 0.9, "y": 0.1, "w": 0.1, "h": 0.1}, text="made on v1")
 
@@ -1904,11 +1905,44 @@ def test_a_comment_outlives_the_eviction_of_the_version_it_was_made_on(desk, fig
         desk.publish(fig)
 
     [back] = desk.sheets()
-    assert 1 not in back["versions"]
+    assert back["versions"] == [1] + list(range(3, 23)), "the last 20, plus the one the comment names"
+    assert desk.get(f"/api/content/main/{sheet['id']}/1").text == SVG.format(color="red")
+    assert desk.get(f"/api/content/main/{sheet['id']}/2").status == 404
+    [comment] = back["comments"]
+    assert comment["version"] == 1
+    assert comment["natural_size"] == {"w": 100, "h": 60}
+
+
+def test_a_comment_outlives_a_version_evicted_before_comments_held_one(desk, figures):
+    """Indexes written before ticket 21 can name a version that is gone."""
+    fig, sheet = _sheet_with_svg(desk, figures)
+    _comment(desk, "add", sheet_id=sheet["id"], anchor={"x": 0.9, "y": 0.1, "w": 0.1, "h": 0.1}, text="made on v1")
+    fig.write_text(SVG.format(color="blue"))
+    desk.publish(fig)
+    desk.stop()
+    _forget_version(desk, sheet["id"], 1)
+    desk.start()
+
+    [back] = desk.sheets()
+    assert back["versions"] == [2]
     [comment] = back["comments"]
     assert comment["version"] == 1
     assert comment["natural_size"] is None, "the version is gone, so there is nothing to measure"
     assert back["natural_size"] == {"w": 100, "h": 60}
+
+
+def _forget_version(desk, sheet_id, n):
+    """What the store did to a commented version before ticket 21: drop the
+    record and the file, and leave the comment naming it."""
+    index_path = desk.desk_dir / "sheets.json"
+    index = _json.loads(index_path.read_text())
+    for record in index["sheets"]:
+        if record["id"] == sheet_id:
+            gone = [v for v in record["versions"] if v["n"] == n]
+            record["versions"] = [v for v in record["versions"] if v["n"] != n]
+            for v in gone:
+                (desk.desk_dir / "content" / sheet_id / v["file"]).unlink()
+    index_path.write_text(_json.dumps(index))
 
 
 def test_resolving_keeps_the_comment_and_removing_drops_it(desk, figures):
@@ -2222,15 +2256,18 @@ def test_desk_feedback_says_when_the_commented_version_is_no_longer_retained(des
     raster.write_bytes(png(100, 100))
     sid = desk.publish(raster).json()["sheet"]["id"]
     _comment(desk, "add", sheet_id=sid, anchor={"x": 0, "y": 0, "w": 0.5, "h": 0.5}, text="early")
-    for i in range(21):
-        raster.write_bytes(png(200, 200) + bytes([i]))
-        desk.publish(raster)
+    raster.write_bytes(png(200, 200))
+    desk.publish(raster)
+    # A comment holds its version now; an index from before that can still name a gone one.
+    desk.stop()
+    _forget_version(desk, sid, 1)
+    desk.start()
 
     proc = _feedback(desk, cwd=figures)
 
     assert proc.returncode == 0, proc.stderr
     assert "#1  on v1, no longer retained — upper left" in proc.stdout
-    assert "pixels on v22: x 0–100, y 0–100 (of 200×200)" in proc.stdout
+    assert "pixels on v2: x 0–100, y 0–100 (of 200×200)" in proc.stdout
     assert "pixels on v1" not in proc.stdout
     [sheet] = _json.loads(_feedback(desk, "--json", cwd=figures).stdout)["sheets"]
     assert sheet["comments"][0]["retained"] is False
@@ -2678,3 +2715,203 @@ def test_desk_feedback_wait_then_hands_the_report_to_a_command(desk, figures, tm
     assert quiet.returncode == 0
     assert "nobody asked" in quiet.stdout
     assert "ran" not in landed.read_text()
+
+
+# --- 21: export a sheet's comments and versions ----------------------------
+
+
+def _export(desk, *args, cwd=None):
+    return run_desk("export", *args, cwd=cwd, port=desk.port, data_dir=desk.data_dir)
+
+
+def _read_manifest(out):
+    return _json.loads((out / "manifest.json").read_text())
+
+
+def test_desk_export_writes_every_comment_and_version_another_agent_can_read(desk, figures, tmp_path):
+    raster = figures / "raster.png"
+    first = png(100, 100)
+    raster.write_bytes(first)
+    sid = desk.publish(raster).json()["sheet"]["id"]
+    before = _comment(
+        desk, "add", sheet_id=sid, anchor={"x": 0.75, "y": 0.1, "w": 0.2, "h": 0.1}, text="the legend covers the data"
+    ).json()["sheet"]["comments"][0]["id"]
+    second = png(200, 300)
+    raster.write_bytes(second)
+    desk.publish(raster)
+    _comment(desk, "resolve", sheet_id=sid, comment_id=before)
+    _comment(desk, "add", sheet_id=sid, anchor=None, text="needs a title")
+    quiet = figures / "quiet.svg"
+    quiet.write_text(SVG.format(color="red"))
+    desk.publish(quiet)
+    out = tmp_path / "bundle"
+
+    proc = _export(desk, "--out", str(out), cwd=figures)
+
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.splitlines() == [str(out), "1 sheet, 2 comments, 2 version files"]
+    manifest = _read_manifest(out)
+    assert manifest["schema"] == 1
+    assert manifest["desk"] == "main"
+    assert manifest["under"] == str(figures)
+    [sheet] = manifest["sheets"]
+    assert sheet["source_path"] == str(raster)
+    assert sheet["origin"] is None
+    assert sheet["kind"] == "png" and sheet["name"] == "raster.png"
+    assert sheet["dir"] == "sheets/01-raster"
+    assert sheet["natural_size"] == {"w": 200, "h": 300}
+    v1, v2 = sheet["versions"]
+    assert v1["n"] == 1 and v1["retained"] is True and v1["file"] == "sheets/01-raster/v1.png"
+    assert v2["n"] == 2 and v2["file"] == "sheets/01-raster/v2.png"
+    assert v1["created_at"] <= v2["created_at"]
+    assert (out / v1["file"]).read_bytes() == first, "the bytes exactly as they were published"
+    assert (out / v2["file"]).read_bytes() == second
+    assert v1["sha256"] == _hashlib.sha256(first).hexdigest() and v1["bytes"] == len(first)
+    resolved, open_ = sheet["comments"]
+    assert resolved["number"] == 1 and resolved["version"] == 1 and resolved["resolved_version"] == 2
+    assert resolved["text"] == "the legend covers the data"
+    assert resolved["location"] == "upper right"
+    assert resolved["pixels_on_version"] == {"x": 75, "y": 10, "w": 20, "h": 10}, "against v1, where it was made"
+    assert resolved["resolved_at"] >= resolved["created_at"]
+    assert open_["number"] == 2 and open_["anchor"] is None and open_["resolved_version"] is None
+    assert open_["resolved_at"] is None and open_["location"] == "whole sheet"
+    assert set(resolved) == {
+        "id", "number", "version", "resolved_version", "anchor", "location",
+        "pixels_on_version", "text", "created_at", "resolved_at",
+    }
+    assert "# A desk export" in (out / "README.md").read_text()
+    assert str(quiet) not in proc.stdout and len(list((out / "sheets").iterdir())) == 1
+
+
+def test_desk_export_keeps_the_versions_comments_name_and_lists_the_rest_as_not_retained(desk, figures, tmp_path):
+    fig, sheet = _sheet_with_svg(desk, figures)
+    made = _comment(desk, "add", sheet_id=sheet["id"], anchor=None, text="on v1").json()["sheet"]["comments"][0]["id"]
+    for i in range(3):
+        fig.write_text(SVG.format(color=f"#{i:06x}"))
+        desk.publish(fig)
+    _comment(desk, "resolve", sheet_id=sheet["id"], comment_id=made)  # on v4
+    for i in range(3, 24):
+        fig.write_text(SVG.format(color=f"#{i:06x}"))
+        desk.publish(fig)
+    # v1 was made on, v4 resolved on: both held. v2 and v3 are gone. Then a
+    # comment from before ticket 21 naming a version the store no longer has.
+    desk.stop()
+    _forget_version(desk, sheet["id"], 4)
+    desk.start()
+    out = tmp_path / "bundle"
+
+    proc = _export(desk, str(fig), "--out", str(out))
+
+    assert proc.returncode == 0, proc.stderr
+    [back] = _read_manifest(out)["sheets"]
+    assert [v["n"] for v in back["versions"]] == [1, 4] + list(range(6, 26))
+    by_n = {v["n"]: v for v in back["versions"]}
+    assert by_n[1]["retained"] is True and (out / by_n[1]["file"]).read_text() == SVG.format(color="red")
+    assert by_n[4] == {"n": 4, "sha256": None, "bytes": None, "created_at": None, "retained": False, "file": None}
+    assert not (out / "sheets" / "01-fit" / "v4.svg").exists(), "the manifest never claims a file it does not have"
+    [comment] = back["comments"]
+    assert comment["version"] == 1 and comment["resolved_version"] == 4
+
+
+def test_a_comment_resolved_before_the_desk_recorded_the_version_reads_back_null(desk, figures):
+    fig, sheet = _sheet_with_svg(desk, figures)
+    cid = _comment(desk, "add", sheet_id=sheet["id"], anchor=None, text="old").json()["sheet"]["comments"][0]["id"]
+    _comment(desk, "resolve", sheet_id=sheet["id"], comment_id=cid)
+    desk.stop()
+    index_path = desk.desk_dir / "sheets.json"
+    index = _json.loads(index_path.read_text())
+    [record] = index["sheets"]
+    del record["comments"][0]["resolved_version"]
+    index_path.write_text(_json.dumps(index))
+    desk.start()
+
+    [comment] = desk.sheets()[0]["comments"]
+
+    assert comment["resolved_at"] is not None
+    assert comment["resolved_version"] is None
+
+
+def test_removing_a_comment_releases_the_version_only_it_held(desk, figures):
+    fig, sheet = _sheet_with_svg(desk, figures)
+    cid = _comment(desk, "add", sheet_id=sheet["id"], anchor=None, text="on v1").json()["sheet"]["comments"][0]["id"]
+    for i in range(21):
+        fig.write_text(SVG.format(color=f"#{i:06x}"))
+        desk.publish(fig)
+    assert 1 in desk.sheets()[0]["versions"]
+
+    _comment(desk, "remove", sheet_id=sheet["id"], comment_id=cid)
+
+    [back] = desk.sheets()
+    assert back["versions"] == list(range(3, 23))
+    assert desk.get(f"/api/content/main/{sheet['id']}/1").status == 404
+
+
+def test_desk_export_scope_is_this_directory_then_all_then_one_path(desk, figures, tmp_path):
+    fig, sheet = _sheet_with_svg(desk, figures)
+    _comment(desk, "add", sheet_id=sheet["id"], anchor=None, text="here")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    other = elsewhere / "other.svg"
+    other.write_text(SVG.format(color="blue"))
+    other_id = desk.publish(other).json()["sheet"]["id"]
+    _comment(desk, "add", sheet_id=other_id, anchor=None, text="there")
+    sent = desk.send("bobs-mac", "/home/bob/fig.svg", SVG.format(color="green").encode()).json()["sheet"]
+    _comment(desk, "add", sheet_id=sent["id"], anchor=None, text="sent")
+    trashed = figures / "binned.svg"
+    trashed.write_text(SVG.format(color="black"))
+    trashed_id = desk.publish(trashed).json()["sheet"]["id"]
+    _comment(desk, "add", sheet_id=trashed_id, anchor=None, text="binned")
+    desk.post("/api/trash", {"sheet_id": trashed_id})
+
+    here = _export(desk, "--out", str(tmp_path / "here"), cwd=figures)
+    everything = _export(desk, "--all", "--out", str(tmp_path / "all"), cwd=figures)
+    one = _export(desk, str(other), "--out", str(tmp_path / "one"), cwd=figures)
+
+    assert here.returncode == 0 and everything.returncode == 0 and one.returncode == 0
+    assert [s["source_path"] for s in _read_manifest(tmp_path / "here")["sheets"]] == [str(fig)]
+    paths = {(s["origin"], s["source_path"]) for s in _read_manifest(tmp_path / "all")["sheets"]}
+    assert paths == {(None, str(fig)), (None, str(other)), ("bobs-mac", "/home/bob/fig.svg")}
+    assert "under" not in _read_manifest(tmp_path / "all")
+    assert [s["source_path"] for s in _read_manifest(tmp_path / "one")["sheets"]] == [str(other)]
+    assert "binned" not in (tmp_path / "all" / "manifest.json").read_text(), "the trash is not exported"
+
+
+def test_desk_export_says_when_there_is_nothing_and_refuses_a_full_directory(desk, figures, tmp_path):
+    fig, sheet = _sheet_with_svg(desk, figures)
+
+    nothing = _export(desk, cwd=figures)
+    assert nothing.returncode == 0, nothing.stderr
+    assert nothing.stdout.startswith(f"nothing to export under {figures}")
+    assert not [p for p in figures.iterdir() if p.name.startswith("desk-export")]
+
+    _comment(desk, "add", sheet_id=sheet["id"], anchor=None, text="now there is")
+    full = tmp_path / "full"
+    full.mkdir()
+    (full / "something").write_text("x")
+    refused = _export(desk, "--out", str(full), cwd=figures)
+    assert refused.returncode != 0
+    assert "not empty" in refused.stderr
+    assert not (full / "manifest.json").exists()
+
+    missing = _export(desk, str(figures / "nope.svg"), cwd=figures)
+    assert missing.returncode != 0
+    assert "is not a sheet" in missing.stderr
+
+    default = _export(desk, cwd=figures)
+    assert default.returncode == 0, default.stderr
+    [made] = [p for p in figures.iterdir() if p.name.startswith("desk-export-")]
+    assert default.stdout.splitlines()[0] == str(made)
+    assert (made / "manifest.json").exists()
+
+
+def test_desk_export_never_starts_the_server(free_port, tmp_path):
+    proc = run_desk(
+        "export", port=free_port, data_dir=tmp_path / "never",
+        env={"DESK_LOG_DIR": str(tmp_path / "logs")},
+    )
+
+    assert proc.returncode != 0
+    assert "not running" in proc.stderr
+    assert "nothing to export" in proc.stderr
+    assert _closed(free_port)
+    assert not (tmp_path / "never").exists()

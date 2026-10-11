@@ -58,6 +58,14 @@ so bare `/desk feedback` covers the ones made from the directory the agent is
 working in, newest first; `--all` is the whole desk. The same thing from a
 shell is `desk feedback [path] [--all] [--json]`.
 
+**Export.** Resolved comments stay on the sheet, and the version each was
+made on and resolved on stays in the store. `desk export [path] [--all]
+[--out DIR]` writes all of it — every comment, open and resolved, and the
+figure files as they were — to a directory with a `manifest.json` and a
+`README.md` that another agent can read without the desk. That is the
+record of what you said about your figures, to hand to a different agent to
+learn from, or to distil into a skill.
+
 **Someone else's desk.** `--to` names a machine on your tailnet that runs a
 desk. The figure lands in *their* inbox, marked with where it came from, and
 where it goes from there is up to them. It is a copy: their desk cannot watch
