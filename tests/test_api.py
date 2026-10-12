@@ -89,6 +89,15 @@ def test_sheets_survive_a_server_restart(desk, figures):
     assert desk.get(sheet["content_url"]).text == SVG.format(color="red")
 
 
+def test_the_state_names_the_server_process_so_a_page_can_tell_it_was_replaced(desk):
+    before = desk.state()["boot"]
+    assert before and desk.state()["boot"] == before
+
+    desk.restart()
+
+    assert desk.state()["boot"] != before
+
+
 # --- 02: sheet identity and versions --------------------------------------
 
 

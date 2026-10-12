@@ -20,6 +20,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
@@ -477,6 +478,10 @@ class Desks:
         self.current_path = self.data_dir / "current.json"
         self.desks_dir.mkdir(parents=True, exist_ok=True)
         self.bus = EventBus()
+        # One value per process. A page that reconnects and finds a different
+        # one knows the server was replaced underneath it, and reloads so the
+        # code it runs is the code being served.
+        self.boot = uuid.uuid4().hex
         self._lock = threading.RLock()
         self._migrate_single_desk()
         self._desks: dict[str, Desk] = {}
@@ -614,6 +619,7 @@ class Desks:
         state["desk"] = desk.name
         state["desks"] = self.names()
         state["data_dir"] = str(self.data_dir)
+        state["boot"] = self.boot
         return state
 
     def content(self, desk_name: str, sheet_id: str, version: int | None):

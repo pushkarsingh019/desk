@@ -356,6 +356,10 @@ words on an `aria-live` region throughout.
 **Live updates over SSE**, not WebSocket — one-way is all that is needed and the
 browser reconnects on its own. A sheet update swaps the image silently and
 paints a ~600ms highlight ring. No movement, no scroll, no focus change.
+The state carries a `boot` value minted once per server process; a page that
+reconnects and sees a different one reloads itself, after any comment being
+written is saved or cancelled, so an open tab never keeps running code the
+server has since replaced.
 
 **Invocation.** `/desk` is a user-invoked Claude Code skill; its frontmatter
 must prevent model invocation. Bare `/desk` resolves the most recently modified

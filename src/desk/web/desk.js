@@ -123,8 +123,20 @@ async function layoutOp(op, params) {
   }
 }
 
+// The server this page was loaded from. A different one answering means the
+// desk was reinstalled: the page is running code the server no longer serves.
+let boot = null;
+let reloadPending = false;
+
+function reloadWhenIdle() {
+  reloadPending = true;
+  if (!commentInProgress()) location.reload();
+}
+
 async function refresh() {
   const fresh = await apiGet('/api/state');
+  if (boot === null) boot = fresh.boot;
+  else if (fresh.boot !== boot) return reloadWhenIdle();
   // A different desk than the one on screen: take its own viewport, not the
   // pan the user made on the last one.
   if (state.desk && fresh.desk !== state.desk) viewTouched = false;
@@ -1667,6 +1679,7 @@ function cancelComment() {
   commentBtn.classList.remove('armed');
   fullscreenEl.classList.remove('commenting');
   newVersionBtn.disabled = startingVersion || fullscreenVersion !== null;
+  if (reloadPending) location.reload();
 }
 
 async function saveComment() {
