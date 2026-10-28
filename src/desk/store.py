@@ -26,6 +26,8 @@ import time
 import unicodedata
 from pathlib import Path
 
+from desk import render
+
 #: A file may reach the desk only if its extension is on this list.
 ALLOWED_EXTENSIONS = {".svg", ".png", ".pdf", ".html", ".md"}
 
@@ -50,10 +52,11 @@ _ORIGIN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,253}$")
 
 #: The kinds a browser shows in an iframe. An iframe eats pointer events and
 #: has no stable natural size, so these take sheet-level comments only.
-FRAME_KINDS = {"html", "md", "pdf"}
+FRAME_KINDS = {"html", "md"}
 
-#: Only sheet-level comments; see above.
-ANCHOR_KINDS = {"svg", "png"}
+#: The kinds shown as an image, with a natural box a comment can be pinned
+#: on. A PDF is rendered to a PNG on the server for exactly this reason.
+ANCHOR_KINDS = {"svg", "png", "pdf"}
 
 
 class PublishError(ValueError):
@@ -201,15 +204,18 @@ def natural_size(kind: str, data: bytes) -> dict | None:
     A matplotlib SVG says `width="460.8pt"` and `viewBox="0 0 460.8 345.6"`,
     and the viewBox is the coordinate system the file is actually drawn in —
     the one an agent reading the file will find — so a unit it would have to
-    convert is not converted, it is passed over. The frame kinds have no
-    natural size: an iframe has nothing stable to measure. None when the
-    size cannot be read.
+    convert is not converted, it is passed over. PDF: the page box in points,
+    the PDF's own coordinate system, by the same reasoning; a many-page PDF
+    is its pages stacked. The frame kinds have no natural size: an iframe has
+    nothing stable to measure. None when the size cannot be read.
     """
     try:
         if kind == "png":
             return _png_size(data)
         if kind == "svg":
             return _svg_size(data)
+        if kind == "pdf":
+            return render.pdf_box(data)
     except (ValueError, struct.error, IndexError):
         return None
     return None
@@ -580,7 +586,7 @@ class Store:
             if anchor is not None and kind not in ANCHOR_KINDS:
                 raise CommentError(
                     f"a .{kind} sheet takes sheet-level comments only "
-                    f"(no anchor): an iframe has no stable natural size"
+                    f"(no anchor): it is shown in an iframe, which has no stable natural size"
                 )
             taken = {c["id"] for c in sheet["comments"]}
             cid = secrets.token_hex(4)

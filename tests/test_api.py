@@ -4,7 +4,9 @@ These tests drive the whole server through HTTP: store, versions, watcher,
 tombstones, debounce. Nothing below this seam is tested directly.
 """
 
-from conftest import PNG, SVG
+import struct
+
+from conftest import PNG, SVG, pdf
 
 
 # --- 01: walking skeleton -------------------------------------------------
@@ -206,7 +208,7 @@ def test_every_allowed_extension_is_accepted(desk, figures):
     files = {
         "a.svg": SVG.format(color="red").encode(),
         "b.png": PNG,
-        "c.pdf": b"%PDF-1.4\n%fake\n",
+        "c.pdf": pdf(),
         "d.html": b"<!doctype html><p>hi</p>",
         "e.md": b"# hi\n",
     }
@@ -653,15 +655,48 @@ def test_a_png_sheet_is_served_as_a_png(desk, figures):
     assert resp.body == PNG
 
 
-def test_a_pdf_sheet_is_served_as_a_pdf(desk, figures):
+def test_a_pdf_sheet_is_shown_as_a_png_and_downloaded_as_the_pdf(desk, figures):
+    # Shown as an image so that it has a natural box to pin comments on. The
+    # box is in the PDF's own points; the picture is rendered at 2 px per point.
     fig = figures / "paper.pdf"
-    fig.write_bytes(b"%PDF-1.4\n%fake\n")
+    fig.write_bytes(pdf((200, 100)))
+    sheet = desk.publish(fig).json()["sheet"]
+    assert sheet["natural_size"] == {"w": 200, "h": 100}
+
+    shown = desk.get(sheet["content_url"])
+    assert shown.headers["Content-Type"] == "image/png"
+    assert shown.body.startswith(b"\x89PNG")
+    assert struct.unpack(">II", shown.body[16:24]) == (400, 200)
+
+    taken = desk.get(sheet["download_url"])
+    assert taken.headers["Content-Type"] == "application/pdf"
+    assert taken.body == fig.read_bytes()
+
+
+def test_a_many_page_pdf_is_shown_as_its_pages_stacked(desk, figures):
+    fig = figures / "supplement.pdf"
+    fig.write_bytes(pdf((200, 100), (300, 50)))
     sheet = desk.publish(fig).json()["sheet"]
 
-    resp = desk.get(sheet["content_url"])
+    size = sheet["natural_size"]
+    assert size["w"] == 300
+    assert size["h"] > 150  # the pages, plus the paper between them
+    shown = desk.get(sheet["content_url"])
+    assert shown.status == 200
+    assert struct.unpack(">II", shown.body[16:24]) == (600, round(size["h"] * 2))
 
-    assert resp.headers["Content-Type"] == "application/pdf"
-    assert resp.body.startswith(b"%PDF")
+
+def test_an_unreadable_pdf_fails_visibly_on_that_sheet_only(desk, figures):
+    fig = figures / "broken.pdf"
+    fig.write_bytes(b"%PDF-1.4\n%fake\n")
+    sheet = desk.publish(fig).json()["sheet"]
+    assert sheet["natural_size"] is None
+
+    # The <img> fails to load and the page marks that one sheet broken; the
+    # desk itself still answers, and the bytes can still be taken back.
+    assert desk.get(sheet["content_url"]).status == 415
+    assert desk.state()["sheets"][0]["id"] == sheet["id"]
+    assert desk.get(sheet["download_url"]).body == fig.read_bytes()
 
 
 def test_a_self_contained_html_plot_is_served_verbatim_for_its_iframe(desk, figures):
@@ -713,7 +748,7 @@ def test_every_kind_updates_in_place_like_an_image_sheet(desk, figures):
     kinds = {
         "a.svg": (SVG.format(color="red").encode(), SVG.format(color="blue").encode()),
         "b.png": (PNG, PNG + b"\x00"),
-        "c.pdf": (b"%PDF-1.4\nv1\n", b"%PDF-1.4\nv2\n"),
+        "c.pdf": (pdf((200, 100)), pdf((300, 100))),
         "d.html": (b"<p>one</p>", b"<p>two</p>"),
         "e.md": (b"# one\n", b"# two\n"),
     }
@@ -2027,8 +2062,20 @@ def test_resolving_or_removing_a_comment_that_is_not_there_is_400(desk, figures)
     assert _comment(desk, "levitate", sheet_id=sheet["id"]).status == 400
 
 
+def test_a_pdf_takes_an_anchored_comment_in_fractions_of_its_point_box(desk, figures):
+    fig = figures / "paper.pdf"
+    fig.write_bytes(pdf((200, 100)))
+    sheet = desk.publish(fig).json()["sheet"]
+
+    added = _comment(desk, "add", sheet_id=sheet["id"], anchor={"x": 0.5, "y": 0.25, "w": 0.25, "h": 0.5}, text="axis")
+    assert added.status == 200
+    comment = added.json()["sheet"]["comments"][0]
+    assert comment["anchor"] == {"x": 0.5, "y": 0.25, "w": 0.25, "h": 0.5}
+    assert added.json()["sheet"]["natural_size"] == {"w": 200, "h": 100}
+
+
 def test_an_anchor_on_an_iframe_kind_is_refused_but_a_sheet_level_comment_is_not(desk, figures):
-    files = {"a.html": b"<p>hi</p>", "b.md": b"# hi\n", "c.pdf": b"%PDF-1.4\n%fake\n"}
+    files = {"a.html": b"<p>hi</p>", "b.md": b"# hi\n"}
     for name, data in files.items():
         (figures / name).write_bytes(data)
         sheet = desk.publish(figures / name).json()["sheet"]
@@ -2781,6 +2828,21 @@ def test_desk_export_writes_every_comment_and_version_another_agent_can_read(des
     }
     assert "# A desk export" in (out / "README.md").read_text()
     assert str(quiet) not in proc.stdout and len(list((out / "sheets").iterdir())) == 1
+
+
+def test_desk_export_writes_a_pdf_as_the_pdf_that_was_published(desk, figures, tmp_path):
+    fig = figures / "paper.pdf"
+    fig.write_bytes(pdf((200, 100)))
+    sid = desk.publish(fig).json()["sheet"]["id"]
+    _comment(desk, "add", sheet_id=sid, anchor={"x": 0.5, "y": 0.5, "w": 0, "h": 0}, text="here")
+    out = tmp_path / "out"
+
+    proc = _export(desk, "--out", str(out), cwd=figures)
+
+    assert proc.returncode == 0, proc.stderr
+    assert "1 version file" in proc.stdout, proc.stdout
+    exported = next(out.rglob("v1.pdf"))
+    assert exported.read_bytes() == fig.read_bytes()
 
 
 def test_desk_export_keeps_the_versions_comments_name_and_lists_the_rest_as_not_retained(desk, figures, tmp_path):

@@ -193,8 +193,13 @@ for, and it needed no migration. The anchor is a rectangle in fractions of
 the content's natural box, a point being a rectangle of zero size and the
 whole sheet being no anchor at all; nothing the browser measured is stored,
 so a pin lands on the same spot of a new version, and a comment made on a
-sheet sent from elsewhere stays here. Iframe kinds take sheet-level comments
-only: an iframe eats pointer events and has no stable natural size. A new
+sheet sent from elsewhere stays here. Iframe kinds — HTML and markdown — take
+sheet-level comments only: an iframe eats pointer events and has no stable
+natural size. A PDF was an iframe kind until that restriction was felt as a
+bug: a figure saved as PDF took no pin. It is now rendered to a PNG on the
+server and shown as an image, so it has a natural box — in the PDF's own
+points, a many-page file being its pages stacked — and takes anchored
+comments like an SVG does; **download** still returns the PDF itself. A new
 version resolves nothing and starts with a clean comment view: only open
 comments made on the viewed version show as pins. The fullscreen version
 selector revisits retained figure revisions and their comments. **Start new
@@ -311,8 +316,10 @@ authority ends at the inbox.
 
 **Rendering.** SVG and PNG as `<img>` — resolution-independent, and twenty
 sheets stay smooth where inline SVG would mean 100k DOM nodes for a single dense
-scatter. Self-contained HTML in a sandboxed iframe as the escape hatch. Markdown
-rendered server-side.
+scatter. PDF rasterised server-side with pdfium (`pypdfium2`) to a PNG and shown
+the same way: the browser's own PDF viewer only runs in an iframe, which cannot
+take a pinned comment. Self-contained HTML in a sandboxed iframe as the escape
+hatch. Markdown rendered server-side.
 
 **The desk is bounded.** 4800 × 3200 desk units on a featureless floor.
 Ticket 07 built an infinite canvas and story 9 originally asked for one, on the

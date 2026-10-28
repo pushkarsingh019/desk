@@ -460,7 +460,9 @@ def cmd_export(args) -> int:
                 )
                 continue
             rel_file = rel_dir / f"v{n}.{sheet['kind']}"
-            fetch(base + record["content_url"], out / rel_file)
+            # `?download` is the bytes as published: a PDF is shown as a PNG
+            # and markdown as a page, and an export wants neither.
+            fetch(base + record["content_url"] + "?download", out / rel_file)
             files += 1
             versions.append(
                 {
@@ -538,8 +540,9 @@ machine when it was not the exporting one). Each sheet has:
   or null while it is open (or when it was resolved before the desk recorded
   this). `anchor` is where, as a rectangle in fractions `0..1` of the
   figure's natural box — `w` and `h` of 0 is a point, null is the whole
-  sheet — and `pixels_on_version` is the same against the pixel size of
-  the version it was made on, when that could be read. `location` is a
+  sheet — and `pixels_on_version` is the same against the natural size of
+  the version it was made on, when that could be read: pixels for an SVG or
+  PNG, points from the top-left for a PDF. `location` is a
   coarse word for the spot. `text` is what the user said.
 
 Only the user writes a comment, and only the user resolves one. A resolved
@@ -656,7 +659,7 @@ def format_feedback(report: dict) -> str:
             f"  from {report['origin']} — a copy; the script that made it is not on this machine"
         )
     about = f"  v{report['version']} · {_count(len(report['comments']), 'open comment')}"
-    about += f" · {_size(size)} px" if size else " · natural size not available"
+    about += f" · {_size(size)} {_unit(report['kind'])}" if size else " · natural size not available"
     lines.append(about)
     for c in report["comments"]:
         made_on = f"on v{c['version']}" + ("" if c["retained"] else ", no longer retained")
@@ -666,15 +669,15 @@ def format_feedback(report: dict) -> str:
             lines.append(f"      fractions: {_span(a, 1, 1, '{:.3f}', note=True)}")
             if c["pixels"]:
                 lines.append(
-                    f"      pixels on v{report['version']}: {_span(a, size['w'], size['h'], '{:d}')}"
-                    f" (of {_size(size)})"
+                    f"      {_unit(report['kind'], long=True)} on v{report['version']}: "
+                    f"{_span(a, size['w'], size['h'], '{:d}')} (of {_size(size)})"
                 )
             else:
                 lines.append(f"      pixels: not available — {_no_size(report['kind'])}")
             if c["pixels_on_version"]:
                 p = c["pixels_on_version"]
                 on = {"x": p["x"], "y": p["y"], "w": p["w"], "h": p["h"]}
-                lines.append(f"      pixels on v{c['version']}: {_pixel_span(on)}")
+                lines.append(f"      {_unit(report['kind'], long=True)} on v{c['version']}: {_pixel_span(on)}")
         for line in c["text"].splitlines() or [""]:
             lines.append(f"      {line}")
     return "\n".join(lines)
@@ -699,6 +702,13 @@ def _pixel_span(p: dict) -> str:
 
 def _size(size: dict) -> str:
     return f"{size['w']}×{size['h']}"
+
+
+def _unit(kind: str, long: bool = False) -> str:
+    """A PDF's natural box is in its own points; everything else is pixels."""
+    if kind == "pdf":
+        return "points" if long else "pt"
+    return "pixels" if long else "px"
 
 
 def _no_size(kind: str) -> str:

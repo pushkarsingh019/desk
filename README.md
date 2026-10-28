@@ -39,7 +39,10 @@ Type `/desk` in Claude Code or Pi, `$desk` in Codex or T3 Code:
 /desk feedback --all                   # on every sheet on the desk
 ```
 
-Figures may be `.svg`, `.png`, `.pdf`, `.html`, or `.md`.
+Figures may be `.svg`, `.png`, `.pdf`, `.html`, or `.md`. The first three
+are shown as images and take pinned comments; a PDF is rendered to a picture
+for showing, and **download** still gives you the PDF. HTML and markdown are
+shown in a frame and take comments on the whole sheet only.
 
 New sheets land in the **inbox**, the strip down the left edge. Drag one out and
 put it where you want it — nothing is ever placed for you. From then on the desk

@@ -139,7 +139,12 @@ text. "Where" comes three ways, and you should use all of them:
 - fractions of the figure — `x 0.750–0.950, y 0.100–0.200`;
 - pixels against the current version — `pixels on v3: x 480–608, y 48–96
   (of 640×480)`. For an SVG these are the file's own viewBox units, the ones
-  you will find in the file. If the comment was made on an older version
+  you will find in the file. For a PDF they are points, the PDF's own
+  coordinate system, and the line says `points` instead of `pixels`. They
+  are measured from the top-left corner, as on a screen, not from the PDF's
+  bottom-left origin, so subtract from the page height to get the PDF's own
+  `y`; a many-page PDF is measured as its pages stacked top to bottom. If the
+  comment was made on an older version
   that is still kept, pixels against that version follow too; if it says
   `no longer retained`, the picture it was made on is gone, and the fractions
   and the current pixels are what you have.

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import json
 import math
 import os
@@ -105,6 +106,8 @@ class Desk:
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self.store = Store(self.root)
+        self._pdf_cache: dict[tuple[str, str], bytes] = {}
+        self._pdf_lock = threading.Lock()
         self.layout_path = self.root / "layout.json"
         self._layout_lock = threading.RLock()
         self.layout = self._load_layout()
@@ -427,7 +430,12 @@ class Desk:
     def content(self, sheet_id: str, version: int | None):
         data, content_type = self.store.content(sheet_id, version)
         sheet = self.store.get(sheet_id)
-        if sheet and sheet["kind"] == "md":
+        if sheet and sheet["kind"] == "pdf":
+            # Shown as an image so that it has a natural box to pin comments
+            # on; `download` still hands back the PDF itself. Raises
+            # render.PdfUnreadable for a file pdfium cannot open.
+            data, content_type = self._rendered_pdf(sheet_id, data), "image/png"
+        elif sheet and sheet["kind"] == "md":
             data = render.markdown_to_page(data)
         elif sheet and sheet["kind"] == "html":
             try:
@@ -435,6 +443,23 @@ class Desk:
             except UnicodeDecodeError as exc:
                 data = render.unreadable_page("This HTML file is not valid UTF-8", str(exc))
         return data, content_type
+
+    #: Rendered PDFs kept in memory, keyed by the bytes they came from. The
+    #: bytes of a version never change, so neither does its picture; the cap
+    #: bounds memory and nothing more, since a miss only costs a render.
+    _PDF_CACHE_SIZE = 32
+
+    def _rendered_pdf(self, sheet_id: str, data: bytes) -> bytes:
+        key = (sheet_id, hashlib.sha256(data).hexdigest())
+        with self._pdf_lock:
+            png = self._pdf_cache.get(key)
+        if png is None:
+            png = render.pdf_to_png(data)
+            with self._pdf_lock:
+                self._pdf_cache[key] = png
+                while len(self._pdf_cache) > self._PDF_CACHE_SIZE:
+                    self._pdf_cache.pop(next(iter(self._pdf_cache)))
+        return png
 
     def download(self, sheet_id: str, version: int | None) -> tuple[bytes, str, str]:
         """The stored bytes untouched, with the name they were published under.
@@ -933,6 +958,9 @@ class Handler(BaseHTTPRequestHandler):
                 data, content_type = self.desks.content(desk_name, sheet_id, version)
         except (KeyError, OSError):
             return self._error(404, f"no content for sheet {sheet_id!r} on desk {desk_name!r}")
+        except render.PdfUnreadable as exc:
+            # The page's <img> fails to load and marks that one sheet broken.
+            return self._error(415, f"sheet {sheet_id!r} could not be rendered: {exc}")
         # A named version's content never changes, so it may be cached hard: a
         # new version arrives at a new URL. The unversioned URL follows the
         # sheet, so caching it would freeze a sheet on an old picture forever.

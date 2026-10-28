@@ -41,8 +41,10 @@ const DOUBLE_CLICK_MS = 450;
 const RECONNECT_MIN_MS = 500;
 const RECONNECT_MAX_MS = 5000;
 
-const IMAGE_KINDS = new Set(['svg', 'png']);
-const FRAME_KINDS = new Set(['html', 'md', 'pdf']);
+// A PDF is rendered to a PNG on the server, so here it is an image like any
+// other, with a natural box a comment can be pinned on.
+const IMAGE_KINDS = new Set(['svg', 'png', 'pdf']);
+const FRAME_KINDS = new Set(['html', 'md']);
 
 // --- elements -------------------------------------------------------------
 
@@ -416,21 +418,10 @@ function contentNode(sheet) {
   }
   const frame = document.createElement('iframe');
   frame.setAttribute('title', sheet.name);
-  if (sheet.kind === 'pdf') {
-    // A PDF goes to the browser's own viewer, which refuses to run in a
-    // sandboxed frame at all — measured on Chrome 151: `allow-same-origin`,
-    // `allow-scripts allow-same-origin`, `allow-same-origin allow-downloads`
-    // and a bare `sandbox` all render a broken-document icon, and only the
-    // absence of the attribute shows the document. The fence does not depend
-    // on it here: the viewer is not a page that runs the file's own script,
-    // and the store serves the bytes as `application/pdf`, so there is nothing
-    // in a PDF sheet for a sandbox to hold back. Every other kind is fenced.
-  } else {
-    // No allow-same-origin: the embedded page runs in an opaque origin and so
-    // cannot reach the desk's DOM, storage, or API. This is the escape hatch's
-    // fence.
-    frame.setAttribute('sandbox', 'allow-scripts allow-popups allow-forms');
-  }
+  // No allow-same-origin: the embedded page runs in an opaque origin and so
+  // cannot reach the desk's DOM, storage, or API. This is the escape hatch's
+  // fence.
+  frame.setAttribute('sandbox', 'allow-scripts allow-popups allow-forms');
   return frame;
 }
 
@@ -1239,6 +1230,9 @@ function fillFullscreen(sheet, { keepView }) {
     existing.src = sheet.content_url;
     ring(fullscreenHolder);
   }
+  // A version that could not be rendered left a note; the next one starts clean.
+  const broken = fullscreenHolder.querySelector('.sheet-broken');
+  if (broken) broken.remove();
   if (!keepView) {
     naturalSize = wantsFrame ? { w: 1100, h: 800 } : naturalSize;
     fitFullscreen();
@@ -1289,8 +1283,7 @@ function closeFullscreen() {
   closePopover();
   fullscreenEl.hidden = true;
   fullscreenId = null;
-  const content = fullscreenHolder.querySelector('img, iframe');
-  if (content) content.remove();
+  for (const node of fullscreenHolder.querySelectorAll('img, iframe, .sheet-broken')) node.remove();
   pinsLayer.textContent = '';
   pinsInBar.textContent = '';
 }

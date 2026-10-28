@@ -280,6 +280,22 @@ PNG = bytes.fromhex(
 )
 
 
+def pdf(*pages: tuple[float, float]) -> bytes:
+    """A valid, blank PDF with one page per (width, height) in points — a
+    vector figure with a natural box. One US-letter page by default."""
+    import io
+
+    import pypdfium2 as pdfium
+
+    document = pdfium.PdfDocument.new()
+    for width, height in pages or ((612, 792),):
+        document.new_page(width, height)
+    out = io.BytesIO()
+    document.save(out)
+    document.close()
+    return out.getvalue()
+
+
 def png(width: int, height: int) -> bytes:
     """A valid, blank PNG of the given size — a raster figure with a natural size."""
     import struct

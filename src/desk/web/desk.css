@@ -367,7 +367,8 @@ body.zoomed-in #grain { opacity: 0; }
    pointer; while any drag is in flight every cover goes back on. */
 .sheet-shield { position: absolute; inset: 0; display: block; }
 .sheet-body[data-kind="svg"] .sheet-shield,
-.sheet-body[data-kind="png"] .sheet-shield { display: none; }
+.sheet-body[data-kind="png"] .sheet-shield,
+.sheet-body[data-kind="pdf"] .sheet-shield { display: none; }
 .sheet.active .sheet-shield { display: none; }
 body.dragging .sheet .sheet-shield,
 body.dragging .pile .sheet-shield { display: block; }
